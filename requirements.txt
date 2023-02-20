@@ -1,0 +1,16 @@
+chex==0.0.8
+dataclasses>=0.6
+distrax>=0.1.1
+flax>=0.4.0
+jax==0.3.2
+jupyter
+matplotlib==3.4.2
+ml_collections
+numpy
+optax>=0.1.1
+pandas
+pytest
+seaborn
+scipy
+tensorboardX
+tqdm
