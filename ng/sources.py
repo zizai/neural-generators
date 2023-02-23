@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import chex
 import jax
 import jax.numpy as jnp
@@ -7,7 +9,7 @@ from ng import au_const
 
 
 class GenericSource(PyTreeNode):
-    def __call__(self, r, t, *args, **kwargs):
+    def __call__(self, *args, **kwargs):
         raise NotImplementedError
 
 
@@ -40,19 +42,65 @@ class ElectronSource(GenericSource):
         return psi
 
 
-class ContinuousPointSource(GenericSource):
-    loc: chex.Array
+class CWSource(GenericSource):
+    loc: Tuple
+    w: Tuple
     E0: chex.Array
     k0: chex.Array
-    omega: chex.Array
+    omega: chex.Scalar
+    t_i: chex.Scalar = 0.
+    t_f: chex.Scalar = 1.
+    c: chex.Scalar = 1.
+    eps_0: chex.Scalar = 1.
 
-    def sample(self, rng, n_samples=1):
-        r = jnp.zeros((n_samples, 2)) + self.loc
-        t = jnp.zeros((n_samples, 1))
+    def __call__(self, r, t, *args, **kwargs):
+        raise NotImplementedError
+
+
+class ContinuousLineSource(CWSource):
+    def sample(self, rng, n_samples=100):
+        if len(self.loc) == 2:
+            if self.w[1] is not None:
+                r_x = jnp.zeros((n_samples, 1)) + self.loc[0]
+                r_y = jax.random.normal(rng, (n_samples, 1)) * self.w[1] / jnp.sqrt(2) + self.loc[1]
+            else:
+                r_x = jax.random.normal(rng, (n_samples, 1)) * self.w[0] / jnp.sqrt(2) + self.loc[0]
+                r_y = jnp.zeros((n_samples, 1)) + self.loc[1]
+        else:
+            raise ValueError
+
+        r = jnp.concatenate([r_x, r_y], -1)
+        t = jax.random.uniform(rng, (n_samples, 1), minval=self.t_i, maxval=self.t_f)
         return r, t
 
     def __call__(self, r, t, *args, **kwargs):
-        delta_r = jnp.alltrue(jnp.equal(r, self.loc), axis=-1, keepdims=True)
+        if len(self.loc) == 2:
+            if self.w[1] is not None:
+                delta_r = jnp.alltrue(jnp.equal(r[..., 0:1], self.loc[0]), axis=-1, keepdims=True)
+            else:
+                delta_r = jnp.alltrue(jnp.equal(r[..., 1:2], self.loc[1]), axis=-1, keepdims=True)
+        else:
+            raise ValueError
+
+        return self.E0 * delta_r * jnp.exp(-1j * self.omega * t)
+
+
+class ContinuousPointSource(CWSource):
+    def sample(self, rng, n_samples=100):
+        r = jnp.zeros((n_samples, len(self.loc))) + jnp.asarray([self.loc])
+        t = jax.random.uniform(rng, (n_samples, 1), minval=self.t_i, maxval=self.t_f)
+        return r, t
+
+    def get_fields(self, r, t):
+        loc = jnp.asarray([self.loc])
+        R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        t_retarded = t - self.t_i - R / self.c
+        fields = jnp.exp(1j * (jnp.sum(self.k0 * (r - loc), axis=-1, keepdims=True) - self.omega * t_retarded))
+        prefactor = 1 / (4 * jnp.pi * self.eps_0 * self.c ** 2 * R)
+        return self.E0 * prefactor * fields
+
+    def __call__(self, r, t, *args, **kwargs):
+        delta_r = jnp.alltrue(jnp.equal(r, jnp.asarray([self.loc])), axis=-1, keepdims=True)
         return self.E0 * delta_r * jnp.exp(-1j * self.omega * t)
 
 

@@ -5,13 +5,16 @@ import jax.numpy as jnp
 
 from flax import linen
 
+from ng.dnb import DynamicNeuralBasis
+
 
 class NeuralGeneratorLayer(linen.Module):
     features: int
 
     @linen.compact
-    def __call__(self, x):
+    def __call__(self, h, x):
         features = self.features
+        heads = int(features // 32)
 
         x0 = x
         x = linen.silu(linen.Dense(features)(x0))
@@ -25,4 +28,4 @@ class NeuralGeneratorLayer(linen.Module):
         # x = linen.silu(linen.Dense(features)(x))
         # x = linen.Dense(features)(x) + x0
         # # x = linen.LayerNorm()(x)
-        return x
+        return h, x

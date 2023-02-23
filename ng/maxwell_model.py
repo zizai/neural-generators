@@ -12,6 +12,7 @@ from ng import au_const
 from ng.materials import GenericMaterial
 from ng.ng_layer import NeuralGeneratorLayer
 from ng.potentials import GenericPotential
+from ng.sources import CWSource
 from ng.train_state import TrainState
 
 
@@ -20,20 +21,17 @@ class MaxwellModelConfig(struct.PyTreeNode):
     t_f: float
     dt: float
     sample_length: int
-    hbar: float = au_const.hbar
-    m: float = au_const.m_e
-    c: float = au_const.c
-    eps_0: float = au_const.eps_0
-    q: float = au_const.q_e
-    omega: float = 2 * math.pi * au_const.c / 800 / au_const.nm
-    wavelength: float = 800 * au_const.nm
+    c: float = 1.
+    eps_0: float = 1.
+    omega: float = 2 * math.pi / 1.5
+    wavelength: float = 1.5
     E0_norm: float = 1.
     fs_l: float = 0.3
     r_dim: int = 2
     features: int = 64
     init_sigma: float = 1.
     modes: int = 20
-    mem_len: int = 200
+    mem_len: int = 800
     n_layers: int = 3
     envelope: str = 'gaussian'
     ic_weight: float = 10.
@@ -57,7 +55,7 @@ class SpaceEmbedding(linen.Module):
         # W_r = W_r * 2 * jnp.pi / self.config.wavelength
         # r_emb = jnp.concatenate([jnp.sin(r @ W_r), jnp.cos(r @ W_r)], -1)
 
-        W_x = 2 ** jnp.linspace(-8, 0, 32)
+        W_x = 2 ** jnp.linspace(-8, 0, 20)
         W_r = jnp.stack(jnp.meshgrid(*([W_x] * r_dim)), 0).reshape(r_dim, -1)
         W_r = W_r * 2 * jnp.pi / self.config.wavelength
         r_emb = jnp.concatenate([jnp.sin(r @ W_r), jnp.cos(r @ W_r)], -1)
@@ -128,7 +126,6 @@ class KNet(linen.Module):
     def __call__(self, h, r, t, light_source, dielectric_fn):
         features = self.config.features
         modes = self.config.modes
-        heads = int(features // 32)
         r_dim = r.shape[-1]
 
         r = jax.lax.stop_gradient(r)
@@ -139,7 +136,7 @@ class KNet(linen.Module):
         eps_min = eps_r.min()
         eps_scale = eps_r.max() - eps_r.min()
         x0 = jnp.where(eps_r.max() == eps_r.min(), jnp.zeros_like(eps_r), (eps_r - eps_min) / (eps_scale + min_noise))
-        x0 = jnp.concatenate([x0, 1 - x0], axis=-1)
+        x = jnp.concatenate([x0, 1 - x0], axis=-1)
 
         # delta_r = jnp.alltrue(jnp.equal(r, light_source.loc), axis=-1, keepdims=True)
         # delta_r = jnp.exp(-jnp.sum((r - light_source.loc) ** 2, axis=-1, keepdims=True) / 2 / (self.config.wavelength / 10) ** 2)
@@ -149,29 +146,29 @@ class KNet(linen.Module):
         # k_dir = jnp.clip((r - light_source.loc) / (r_norm + 1e-5), -1, 1)
         # x0 = jnp.concatenate([x0, k_dir], axis=-1)
 
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x)
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x)
         # x = linen.LayerNorm()(x)
 
         r_emb = SpaceEmbedding(self.config)(r)
-        t_emb = TimeEmbedding(self.config)(t)
 
-        x = jnp.concatenate([x, r_emb], -1)
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
+        if isinstance(light_source, CWSource):
+            x = jnp.concatenate([x, r_emb], -1)
+        else:
+            t_emb = TimeEmbedding(self.config)(t)
+            x = jnp.concatenate([x, r_emb, t_emb], -1)
 
-        x = jnp.concatenate([x, t_emb], -1)
         x = linen.silu(linen.Dense(features * 2)(x))
         x = linen.Dense(features)(x)
 
         for _ in range(self.config.n_layers):
-            x = NeuralGeneratorLayer(features)(x)
+            h, x = NeuralGeneratorLayer(features)(h, x)
 
         x = linen.silu(linen.Dense(features)(x))
         k = linen.Dense(r_dim * modes)(x)
         k = k.reshape(-1, modes, r_dim)
         # k = k + k0[:, None]
-        k = k * light_source.k0
+        k = k * jnp.sqrt(jnp.sum(light_source.k0 ** 2))
 
         # x = linen.silu(linen.Dense(features)(x))
         # theta = linen.Dense(features // 2)(x).reshape(-1, features // 2) * jnp.pi
@@ -201,8 +198,6 @@ class SNet(linen.Module):
     def __call__(self, h, r, t, light_source, dielectric_fn):
         features = self.config.features
         modes = self.config.modes
-        heads = int(features // 32)
-        r_dim = r.shape[-1]
 
         r = jax.lax.stop_gradient(r)
         t = jax.lax.stop_gradient(t)
@@ -212,29 +207,25 @@ class SNet(linen.Module):
         eps_min = eps_r.min()
         eps_scale = eps_r.max() - eps_r.min()
         x0 = jnp.where(eps_r.max() == eps_r.min(), jnp.zeros_like(eps_r), (eps_r - eps_min) / (eps_scale + min_noise))
-        x0 = jnp.concatenate([x0, 1 - x0], axis=-1)
-
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x)
-        # x = linen.LayerNorm()(x)
+        x = jnp.concatenate([x0, 1 - x0], axis=-1)
 
         # delta_r = jnp.alltrue(jnp.equal(r, light_source.mu), axis=-1, keepdims=True)
         # delta_r = jnp.exp(-jnp.sum((r - light_source.mu) ** 2, axis=-1, keepdims=True) / 2 / (self.config.wavelength / 10) ** 2)
         # x0 = jnp.concatenate([x0, delta_r], axis=-1)
 
         r_emb = SpaceEmbedding(self.config)(r)
-        t_emb = TimeEmbedding(self.config)(t)
 
-        x = jnp.concatenate([x, r_emb], -1)
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
+        if isinstance(light_source, CWSource):
+            x = jnp.concatenate([x, r_emb], -1)
+        else:
+            t_emb = TimeEmbedding(self.config)(t)
+            x = jnp.concatenate([x, r_emb, t_emb], -1)
 
-        x = jnp.concatenate([x, t_emb], -1)
         x = linen.silu(linen.Dense(features * 2)(x))
         x = linen.Dense(features)(x)
 
         for _ in range(self.config.n_layers):
-            x = NeuralGeneratorLayer(features)(x)
+            h, x = NeuralGeneratorLayer(features)(h, x)
 
         x = linen.silu(linen.Dense(features)(x))
         s = linen.Dense(modes)(x)
@@ -249,7 +240,6 @@ class WNet(linen.Module):
     def __call__(self, h, r, t, light_source, dielectric_fn):
         features = self.config.features
         modes = self.config.modes
-        heads = int(features // 32)
         r_dim = r.shape[-1]
 
         r = jax.lax.stop_gradient(r)
@@ -260,7 +250,7 @@ class WNet(linen.Module):
         eps_min = eps_r.min()
         eps_scale = eps_r.max() - eps_r.min()
         x0 = jnp.where(eps_r.max() == eps_r.min(), jnp.zeros_like(eps_r), (eps_r - eps_min) / (eps_scale + min_noise))
-        x0 = jnp.concatenate([x0, 1 - x0], axis=-1)
+        x = jnp.concatenate([x0, 1 - x0], axis=-1)
 
         # envelope = jnp.exp(-(r[:, 0:1] - t) ** 2 / 2 / light_source.sigma_t ** 2)
         # x0 = jnp.concatenate([x0, envelope], axis=-1)
@@ -269,22 +259,19 @@ class WNet(linen.Module):
         # # delta_r = jnp.exp(-jnp.sum((r - light_source.mu) ** 2, axis=-1, keepdims=True) / 2 / (self.config.wavelength / 10) ** 2)
         # x0 = jnp.concatenate([x0, delta_r, 1 - delta_r], axis=-1)
 
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x)
-
         r_emb = SpaceEmbedding(self.config)(r)
-        t_emb = TimeEmbedding(self.config)(t)
 
-        x = jnp.concatenate([x, r_emb], -1)
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
+        if isinstance(light_source, CWSource):
+            x = jnp.concatenate([x, r_emb], -1)
+        else:
+            t_emb = TimeEmbedding(self.config)(t)
+            x = jnp.concatenate([x, r_emb, t_emb], -1)
 
-        x = jnp.concatenate([x, t_emb], -1)
         x = linen.silu(linen.Dense(features * 2)(x))
         x = linen.Dense(features)(x)
 
         for _ in range(self.config.n_layers):
-            x = NeuralGeneratorLayer(features)(x)
+            h, x = NeuralGeneratorLayer(features)(h, x)
 
         x = linen.silu(linen.Dense(features)(x))
         w = linen.Dense(r_dim * modes)(x)
@@ -326,17 +313,17 @@ class MaxwellModel(linen.Module):
 
     def setup(self):
         self.e_net = ENet(self.config)
+        # self.e_net = SIREN(self.config)
 
     def get_observables(self, rng, h, r, t, light_source, dielectric_fn):
-        c, hbar, m, q = self.config.c, self.config.hbar, self.config.m, self.config.q
+        c = self.config.c
         eps_0, wavelength = self.config.eps_0, self.config.wavelength
-        omega = 2 * jnp.pi * c / wavelength
 
-        source_r, source_t = light_source.sample(rng)
+        # source_r, source_t = light_source.sample(rng, n_samples=1)
         # r_ls = light_source.mu
         # t_ls = t_l[:1]
-        r = jnp.concatenate([r, source_r], 0)
-        t = jnp.concatenate([t, source_t], 0)
+        # r = jnp.concatenate([r, source_r], 0)
+        # t = jnp.concatenate([t, source_t], 0)
 
         # r = r / au_const.nm * 1e-3
         # dL = 1 / au_const.nm * 1e-3
@@ -344,7 +331,7 @@ class MaxwellModel(linen.Module):
         # omega =
 
         E_field = self.e_net(h, r, t, light_source, dielectric_fn)
-        V = q * jnp.sum(r * E_field, axis=-1, keepdims=True)
+        # V = q * jnp.sum(r * E_field, axis=-1, keepdims=True)
 
         # def curl_E_fn(_r, _t):
         #     jac = jax.jacfwd(lambda some_r: self.e_net(h, some_r, _t, dielectric_fn))(_r)
@@ -466,7 +453,6 @@ class MaxwellModel(linen.Module):
 
         obs = dict(
             E_field=E_field,
-            V=V,
             err_em=err_em,
             logq=0.
         )
@@ -486,8 +472,6 @@ class MaxwellModel(linen.Module):
 
 
 def create(config: MaxwellModelConfig):
-    hbar, m = config.hbar, config.m
-
     # layers = [NPILayer(config) for i in range(config.T)]
     # npi = NPI(config, layers)
     features, r_dim = config.features, config.r_dim
@@ -581,10 +565,10 @@ def create(config: MaxwellModelConfig):
         h_traj, r_traj, t_traj, v_traj = sample_train(params, key, h_i, r_i, t_i, v_i, light_source, dielectric_fn, lamb)
         # h_traj, r_traj, t_traj = data
 
-        keys = jax.random.split(rng, h_traj.shape[0])
-        obs_traj = get_observables(params, keys, h_traj, r_traj, t_traj, light_source, dielectric_fn)
+        rng, *keys = jax.random.split(rng, h_traj.shape[0] + 1)
+        obs_traj = get_observables(params, jnp.asarray(keys), h_traj, r_traj, t_traj, light_source, dielectric_fn)
 
-        err_em = obs_traj['err_em']
+        err_pde = obs_traj['err_em']
 
         # V_traj = obs_traj['V']
         # V_traj1 = jnp.concatenate([V_i[None], V_traj], 0)
@@ -598,7 +582,7 @@ def create(config: MaxwellModelConfig):
         # E = E_i + V_sum
         # err_pde = H_traj - E
         # err_pde = H_traj - E
-        err_pde = jnp.sum(err_em)
+        err_pde = jnp.sum(err_pde)
 
         # p_pred_traj = obs_traj['p_pred']
         # err_score = p_traj - p_pred_traj
@@ -613,7 +597,25 @@ def create(config: MaxwellModelConfig):
         # E_i = jnp.mean(0.5 * jnp.sum(p_i ** 2, axis=-1, keepdims=True) / m + potential_fn(r_i))
         # E_i_pred = jnp.mean(H_traj, 1)
         # p_i_pred = p_traj[0]
-        err_ic = 0.
+
+        rng, key = jax.random.split(rng)
+        loc = jnp.asarray([light_source.loc])
+        ic_r = jax.random.uniform(key, r_traj.shape[1:], minval=-1., maxval=1.) * config.wavelength * 10 + loc
+        # ic_t = jax.random.uniform(key, t_traj.shape[1:]) * (config.t_f - config.t_i) + config.t_i
+        ic_t = jnp.zeros(t_traj.shape[1:]) + config.t_i
+        obs_ic = model.apply({'params': params}, key, h_i, ic_r, ic_t, light_source, dielectric_fn,
+                             method=model.get_observables)
+        E_pred = obs_ic['E_field']
+        E_target = light_source.get_fields(ic_r, ic_t)
+        imp_weights = jnp.sum((ic_r - loc) ** 2, axis=-1, keepdims=True)
+        err_ic = jnp.sum(jnp.abs(E_pred - E_target) ** 2 * imp_weights)
+        # err_ic = 0.
+        # rng, key = jax.random.split(rng)
+        # source_r, source_t = light_source.sample(key)
+        # rng, key = jax.random.split(rng)
+        # obs_ic = model.apply({'params': params}, key, h_i, source_r, source_t, light_source, dielectric_fn, method=model.get_observables)
+        # err_ic = obs_ic['err_em']
+        # err_ic = jnp.sum(err_ic)
         # err_ic = jnp.mean(jnp.sum(jnp.abs(p_i_pred - p_i) ** 2, axis=-1, keepdims=True))
         # err_ic += jnp.mean(jnp.abs(E_i_pred - E_i) ** 2)
         # err_ic = jnp.sum(jnp.abs(p_i_pred - p_i) ** 2, axis=-1, keepdims=True)

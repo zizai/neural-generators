@@ -16,16 +16,14 @@ from ng import au_const
 from ng.materials import GenericMaterial
 from ng.maxwell_model import MaxwellModelConfig
 from ng.maxwell_trainer import maxwell_trainer_config, MaxwellTrainer
-from ng.sources import ContinuousPointSource, GaussianPulseSource
+from ng.sources import ContinuousPointSource
 
 
-class DielectricPrism(GenericMaterial):
+class DielectricVacuum(GenericMaterial):
     rx: chex.Scalar
     ry: chex.Scalar
     x0: chex.Scalar = 0.
     y0: chex.Scalar = 0.
-    alpha: chex.Scalar = 0.25 * np.pi
-    eps_max: chex.Scalar = 1.512 ** 2
 
     def sample(self, rng, n_samples):
         r = jax.random.normal(rng, (n_samples, 2))
@@ -34,16 +32,10 @@ class DielectricPrism(GenericMaterial):
 
     def __call__(self, r, *args, **kwargs):
         eps_r = jnp.ones(r.shape)
-
-        x, y = r[..., 0], r[..., 1]
-        in_prism = jnp.logical_and(x >= self.x0, x <= self.rx - self.x0)
-        in_prism = jnp.logical_and(in_prism, y >= self.y0)
-        in_prism = jnp.logical_and(in_prism, x * jnp.tan(alpha) >= y)
-        eps_r = jnp.where(in_prism[..., None], self.eps_max, eps_r)
         return eps_r
 
 
-def run_ng(init_sigma):
+def run(init_sigma):
     seed = 47
 
     beta = 90 / 180 * jnp.pi
@@ -56,23 +48,24 @@ def run_ng(init_sigma):
     Ly = 50
 
     t_i = 0.
-    t_f = 3e2 * fs_l
+    t_f = wavelength / c * fs_l
     dt = 0.1 * fs_l
 
     source_E0 = jnp.array([[jnp.sin(beta), jnp.cos(beta)]]) * 1.
-    source_k0 = 2 * jnp.pi / wavelength
-    source_r = jnp.array([[0., 0.]])
+    source_k0 = jnp.array([[jnp.cos(beta), jnp.sin(beta)]]) * 2 * jnp.pi / wavelength
+    source_loc = (0., 0.)
+    source_w = (None, None)
     source_t0 = 0.
-    # light_source = ContinuousPointSource(source_r, source_E0, source_k0, omega)
-    light_source = GaussianPulseSource(source_r, w_l / au_const.nm * 1e-3, source_t0, sigma_l / au_const.fs * fs_l,
-                                       source_E0, source_k0, omega)
+    light_source = ContinuousPointSource(source_loc, source_w, source_E0, source_k0, omega, t_i, t_f)
+    # light_source = GaussianPulseSource(source_r, w_l / au_const.nm * 1e-3, source_t0, sigma_l / au_const.fs * fs_l,
+    #                                    source_E0, source_k0, omega)
 
     trainer_config = maxwell_trainer_config()
     trainer_config.update(
         seed=seed,
         n_samples=args.n_samples,
         light_source=light_source,
-        dielectric_fn=DielectricPrism(Lx, Ly, eps_max=eps_max),
+        dielectric_fn=DielectricVacuum(Lx, Ly),
         etol=1e-2
     )
     model_config = MaxwellModelConfig(
@@ -87,7 +80,7 @@ def run_ng(init_sigma):
         E0_norm=E0_norm,
         init_sigma=init_sigma,
         features=args.features,
-        modes=32,
+        modes=1,
         n_layers=args.n_layers,
         dtype=jnp.float32
     )
@@ -97,13 +90,13 @@ def run_ng(init_sigma):
 
         pos_x = jax.random.uniform(keys.pop(), (n_samples, 1), minval=-0.5 * Lx, maxval=1.5 * Lx)
         pos_y = jax.random.uniform(keys.pop(), (n_samples, 1), minval=-0.2 * Ly, maxval=0.8 * Ly)
-        r_l = jnp.concatenate([pos_x, pos_y], axis=-1)
-        assert r_l.shape == (n_samples, 2)
+        r = jnp.concatenate([pos_x, pos_y], axis=-1)
+        assert r.shape == (n_samples, 2)
 
-        # t_l = jnp.zeros((n_samples, 1)) + t_i
-        t_l = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_f - t_i) + t_i
-        v_l = jax.random.normal(keys.pop(), (n_samples, 2)) * 0.1 * c
-        return r_l, t_l, v_l
+        # t = jnp.zeros((n_samples, 1)) + t_i
+        t = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_f - t_i) + t_i
+        v = jax.random.normal(keys.pop(), (n_samples, 2)) * 0.1 * c
+        return r, t, v
 
     def grid_field_init(n_x, rng):
         n_y = n_x // 2
@@ -220,7 +213,7 @@ if __name__ == '__main__':
     parser.add_argument('--features', type=int, default=64)
     parser.add_argument('--n_layers', type=int, default=5)
     parser.add_argument('--n_samples', type=int, default=400)
-    parser.add_argument('--sample_length', type=int, default=20)
+    parser.add_argument('--sample_length', type=int, default=10)
     parser.add_argument('--train_steps', type=int, default=1000)
     args = parser.parse_args()
 
@@ -258,4 +251,4 @@ if __name__ == '__main__':
 
     sweep_sigmas = [0.1]
     for _sigma in sweep_sigmas:
-        run_ng(_sigma)
+        run(_sigma)
