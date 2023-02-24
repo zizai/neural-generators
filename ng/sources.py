@@ -95,7 +95,8 @@ class ContinuousPointSource(CWSource):
         loc = jnp.asarray([self.loc])
         R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
         t_retarded = t - self.t_i - R / self.c
-        fields = jnp.exp(1j * (jnp.sum(self.k0 * (r - loc), axis=-1, keepdims=True) - self.omega * t_retarded))
+        # fields = jnp.exp(1j * (jnp.sum(self.k0 * (r - loc), axis=-1, keepdims=True) - self.omega * t_retarded))
+        fields = jnp.exp(1j * (self.k0 * R - self.omega * t_retarded))
         prefactor = 1 / (4 * jnp.pi * self.eps_0 * self.c ** 2 * R)
         return self.E0 * prefactor * fields
 

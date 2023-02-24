@@ -35,6 +35,28 @@ class DielectricVacuum(GenericMaterial):
         return eps_r
 
 
+def plot_fields(E, file_prefix='vacuum_cw'):
+    Ex = E[..., 0]
+    Ex_max = np.abs(Ex.real).max()
+    divnorm = colors.TwoSlopeNorm(vmin=-Ex_max, vcenter=0., vmax=Ex_max)
+    plt.imshow(np.flipud(Ex.real), cmap='RdBu', norm=divnorm)
+    # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
+    plt.colorbar()
+    # plt.show()
+    plt.savefig('./' + file_prefix + '_Ex.png')
+    plt.clf()
+
+    Ey = E[..., 1]
+    Ey_max = np.abs(Ey.real).max()
+    divnorm = colors.TwoSlopeNorm(vmin=-Ey_max, vcenter=0., vmax=Ey_max)
+    plt.imshow(np.flipud(Ey.real), cmap='RdBu', norm=divnorm)
+    # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
+    plt.colorbar()
+    # plt.show()
+    plt.savefig('./' + file_prefix + '_Ey.png')
+    plt.clf()
+
+
 def run(init_sigma):
     seed = 47
 
@@ -56,7 +78,7 @@ def run(init_sigma):
     source_loc = (0., 0.)
     source_w = (None, None)
     source_t0 = 0.
-    light_source = ContinuousPointSource(source_loc, source_w, source_E0, source_k0, omega, t_i, t_f)
+    light_source = ContinuousPointSource(source_loc, source_w, source_E0, k0, omega, t_i, t_f)
     # light_source = GaussianPulseSource(source_r, w_l / au_const.nm * 1e-3, source_t0, sigma_l / au_const.fs * fs_l,
     #                                    source_E0, source_k0, omega)
 
@@ -119,29 +141,15 @@ def run(init_sigma):
     trainer.train(args.train_steps)
 
     ic = grid_field_init(200, trainer.rng)
+    ic_r, ic_t, _ = ic
+    ic_E = light_source.get_fields(ic_r, ic_t)
+    ic_E = ic_E.reshape(100, 200, -1)
+    plot_fields(ic_E, 'vacuum_cw_ic')
+
     # ic = grid_field_init(20000, 20, trainer.rng)
     preds, rs, ts, vs = trainer.eval(*ic)
-    E_field = preds[0]
-    Ex = E_field[..., 0].reshape(100, 200)
-    Ex_max = np.abs(Ex.real).max()
-    divnorm = colors.TwoSlopeNorm(vmin=-Ex_max, vcenter=0., vmax=Ex_max)
-    plt.imshow(np.flipud(Ex.real), cmap='RdBu', norm=divnorm)
-    # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
-    plt.colorbar()
-    # plt.show()
-    plt.savefig(f'./prism_Ex_t_{ts[0].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}.png')
-    plt.clf()
-
-    E_field = preds[-1]
-    Ex = E_field[..., 0].reshape(100, 200)
-    Ex_max = np.abs(Ex.real).max()
-    divnorm = colors.TwoSlopeNorm(vmin=-Ex_max, vcenter=0., vmax=Ex_max)
-    plt.imshow(np.flipud(Ex.real), cmap='RdBu', norm=divnorm)
-    # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
-    plt.colorbar()
-    # plt.show()
-    plt.savefig(f'./prism_Ex_t_{ts[-1].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}.png')
-    plt.clf()
+    E_pred = preds[0].reshape(100, 200, -1)
+    plot_fields(E_pred, f'vacuum_cw_t_{ts[0].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}')
 
     # v_f = vs[-1]
     # beta_e_f = np.sqrt(np.sum(v_f ** 2, axis=-1)) / au_const.c

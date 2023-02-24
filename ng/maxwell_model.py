@@ -168,7 +168,7 @@ class KNet(linen.Module):
         k = linen.Dense(r_dim * modes)(x)
         k = k.reshape(-1, modes, r_dim)
         # k = k + k0[:, None]
-        k = k * jnp.sqrt(jnp.sum(light_source.k0 ** 2))
+        k = k * light_source.k0
 
         # x = linen.silu(linen.Dense(features)(x))
         # theta = linen.Dense(features // 2)(x).reshape(-1, features // 2) * jnp.pi
