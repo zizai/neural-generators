@@ -45,7 +45,7 @@ class ElectronSource(GenericSource):
 class CWSource(GenericSource):
     loc: Tuple
     w: Tuple
-    E0: chex.Array
+    I0: chex.Array
     k0: chex.Array
     omega: chex.Scalar
     t_i: chex.Scalar = 0.
@@ -85,24 +85,42 @@ class ContinuousLineSource(CWSource):
         return self.E0 * delta_r * jnp.exp(-1j * self.omega * t)
 
 
-class ContinuousPointSource(CWSource):
+class DipoleSource(CWSource):
     def sample(self, rng, n_samples=100):
         r = jnp.zeros((n_samples, len(self.loc))) + jnp.asarray([self.loc])
         t = jax.random.uniform(rng, (n_samples, 1), minval=self.t_i, maxval=self.t_f)
         return r, t
 
-    def get_fields(self, r, t):
+    def get_dipole_moment(self, t):
+        return self.I0 * jnp.sin(self.omega * t)
+
+    def get_potentials(self, r, t):
         loc = jnp.asarray([self.loc])
         R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
         t_retarded = t - self.t_i - R / self.c
-        # fields = jnp.exp(1j * (jnp.sum(self.k0 * (r - loc), axis=-1, keepdims=True) - self.omega * t_retarded))
-        fields = jnp.exp(1j * (self.k0 * R - self.omega * t_retarded))
-        prefactor = 1 / (4 * jnp.pi * self.eps_0 * self.c ** 2 * R)
-        return self.E0 * prefactor * fields
+
+        _, dot_p = jax.jvp(lambda _t: self.get_dipole_moment(_t), [t_retarded + 0j], [jnp.ones_like(t_retarded) + 0j])
+        dot_p = dot_p.reshape(r.shape)
+        A0 = 1 / (4 * jnp.pi * self.eps_0 * self.c ** 2 * R)
+        A = A0 * dot_p
+
+        p = self.get_dipole_moment(t_retarded)
+        phi0 = 1 / (4 * jnp.pi * self.eps_0 * R ** 3)
+        phi = phi0 * jnp.sum((p + (R / self.c) * dot_p) * (r - loc), axis=-1, keepdims=True)
+
+        return phi, A
+
+    def get_fields(self, r, t):
+        grad_phi = jax.vmap(jax.jacfwd(lambda _r, _t: self.get_potentials(_r, _t)[0]))(r, t)
+        grad_phi = grad_phi.reshape(r.shape)
+        _, dot_A = jax.jvp(lambda _t: self.get_potentials(r, _t)[1], [t + 0j], [jnp.ones_like(t) + 0j])
+        dot_A = dot_A.reshape(r.shape)
+        E = -grad_phi - dot_A
+        return E
 
     def __call__(self, r, t, *args, **kwargs):
         delta_r = jnp.alltrue(jnp.equal(r, jnp.asarray([self.loc])), axis=-1, keepdims=True)
-        return self.E0 * delta_r * jnp.exp(-1j * self.omega * t)
+        return self.I0 * delta_r * jnp.exp(-1j * self.omega * t)
 
 
 class GaussianPulseSource(GenericSource):

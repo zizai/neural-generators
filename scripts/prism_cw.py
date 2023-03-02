@@ -16,7 +16,7 @@ from ng import au_const
 from ng.materials import GenericMaterial
 from ng.maxwell_model import MaxwellModelConfig
 from ng.maxwell_trainer import maxwell_trainer_config, MaxwellTrainer
-from ng.sources import ContinuousPointSource
+from ng.sources import DipoleSource
 
 
 class DielectricPrism(GenericMaterial):
@@ -64,7 +64,7 @@ def run(init_sigma):
     source_loc = (-wavelength, 0.)
     source_w = (None, None)
     source_t0 = 0.
-    light_source = ContinuousPointSource(source_loc, source_w, source_E0, source_k0, omega, t_i, t_f)
+    light_source = DipoleSource(source_loc, source_w, source_E0, source_k0, omega, t_i, t_f)
     # light_source = GaussianPulseSource(source_r, w_l / au_const.nm * 1e-3, source_t0, sigma_l / au_const.fs * fs_l,
     #                                    source_E0, source_k0, omega)
 
