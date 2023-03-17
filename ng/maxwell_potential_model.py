@@ -46,11 +46,11 @@ class SpaceEmbedding(linen.Module):
     config: MaxwellPotentialModelConfig
 
     @linen.compact
-    def __call__(self, r):
+    def __call__(self, r, light_source):
         features = self.config.features
         # r_dim = r.shape[-1]
         r_dim = 2
-        r = r[..., :2]
+        xy = r[..., :2]
 
         # W_r = self.param('W_r', jax.nn.initializers.normal(stddev=self.config.init_sigma, dtype=self.config.dtype), (r_dim, features))
         # W_r = jax.lax.stop_gradient(W_r)
@@ -60,7 +60,7 @@ class SpaceEmbedding(linen.Module):
         W_x = 2 ** jnp.linspace(-8, 0, 16)
         W_r = jnp.stack(jnp.meshgrid(*([W_x] * r_dim)), 0).reshape(r_dim, -1)
         W_r = W_r * 2 * jnp.pi / self.config.wavelength
-        r_emb = jnp.concatenate([jnp.sin(r @ W_r), jnp.cos(r @ W_r)], -1)
+        r_emb = jnp.concatenate([jnp.sin(xy @ W_r), jnp.cos(xy @ W_r)], -1)
 
         # angles = jnp.arange(0, modes) / modes * 2 * jnp.pi
         # W_r = jnp.stack([jnp.cos(angles), jnp.sin(angles)], 0) * 2 * jnp.pi / self.config.wavelength
@@ -70,6 +70,9 @@ class SpaceEmbedding(linen.Module):
         # W_r = W_r * jnp.pi / self.config.wavelength
         # r_emb = jnp.concatenate([jnp.sin(r[..., None] * W_r), jnp.cos(r[..., None] * W_r)], -1).reshape(-1, modes * r_dim)
 
+        loc = jnp.asarray([light_source.loc])
+        R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        r_emb = jnp.concatenate([r_emb, r / (R + 1e-6)], -1)
         r_emb = linen.silu(linen.Dense(features)(r_emb))
         r_emb = linen.Dense(features)(r_emb)
         return r_emb
@@ -79,7 +82,7 @@ class TimeEmbedding(linen.Module):
     config: MaxwellPotentialModelConfig
 
     @linen.compact
-    def __call__(self, t):
+    def __call__(self, t, light_source):
         features = self.config.features
 
         # W_t = self.param('W_t', jax.nn.initializers.normal(stddev=self.config.init_sigma, dtype=self.config.dtype), (1, features))
@@ -132,8 +135,8 @@ class PhiNet(linen.Module):
 
         x = MaterialEmbedding(self.config)(r, dielectric_fn)
 
-        r_emb = SpaceEmbedding(self.config)(r)
-        t_emb = TimeEmbedding(self.config)(t)
+        r_emb = SpaceEmbedding(self.config)(r, light_source)
+        t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
 
         x = linen.silu(linen.Dense(features * 2)(x))
@@ -159,8 +162,8 @@ class ANet(linen.Module):
 
         x = MaterialEmbedding(self.config)(r, dielectric_fn)
 
-        r_emb = SpaceEmbedding(self.config)(r)
-        t_emb = TimeEmbedding(self.config)(t)
+        r_emb = SpaceEmbedding(self.config)(r, light_source)
+        t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
 
         x = linen.silu(linen.Dense(features * 2)(x))
