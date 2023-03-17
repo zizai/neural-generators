@@ -11,7 +11,7 @@ from ml_collections import ConfigDict
 from scipy import constants
 from tqdm import tqdm
 
-from ng import maxwell_model
+from ng import maxwell_model, maxwell_potential_model
 from ng.base_trainer import BaseTrainer
 from ng.train_state import TrainState
 
@@ -33,7 +33,7 @@ def maxwell_trainer_config():
 
 
 class MaxwellTrainer(BaseTrainer):
-    def __init__(self, config: ConfigDict, init_cond: Callable, model_config: maxwell_model.MaxwellModelConfig, debug=False):
+    def __init__(self, config: ConfigDict, init_cond: Callable, model_config: maxwell_potential_model.MaxwellPotentialModelConfig, debug=False):
         super(MaxwellTrainer, self).__init__(config)
         self.model_config = model_config
 
@@ -47,7 +47,7 @@ class MaxwellTrainer(BaseTrainer):
             r_i, t_i, v_i = init_cond(n_samples, _key)
             return r_i, t_i, v_i
 
-        init, eval_step, sample_step, train_step = maxwell_model.create(model_config)
+        init, eval_step, sample_step, train_step = maxwell_potential_model.create(model_config)
 
         rng, key = jax.random.split(rng)
         ic = get_ic(key)
@@ -80,7 +80,8 @@ class MaxwellTrainer(BaseTrainer):
 
         hs, rs, vs, ts = [], [], [], []
         preds = []
-        n_steps = int(self.model_config.t_f / self.model_config.dt)
+        t_total = self.model_config.t_domain[1] - self.model_config.t_domain[0]
+        n_steps = int(t_total / self.model_config.dt)
         skip = n_steps / self.model_config.sample_length
         tqdm_iter = tqdm(range(n_steps))
 

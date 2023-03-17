@@ -27,7 +27,6 @@ class MaxwellModelConfig(struct.PyTreeNode):
     wavelength: float = 1.5
     E0_norm: float = 1.
     fs_l: float = 0.3
-    r_dim: int = 2
     features: int = 64
     init_sigma: float = 1.
     modes: int = 20
@@ -48,14 +47,16 @@ class SpaceEmbedding(linen.Module):
     @linen.compact
     def __call__(self, r):
         features = self.config.features
-        r_dim = r.shape[-1]
+        # r_dim = r.shape[-1]
+        r_dim = 2
+        r = r[..., :2]
 
         # W_r = self.param('W_r', jax.nn.initializers.normal(stddev=self.config.init_sigma, dtype=self.config.dtype), (r_dim, features))
         # W_r = jax.lax.stop_gradient(W_r)
         # W_r = W_r * 2 * jnp.pi / self.config.wavelength
         # r_emb = jnp.concatenate([jnp.sin(r @ W_r), jnp.cos(r @ W_r)], -1)
 
-        W_x = 2 ** jnp.linspace(-8, 0, 20)
+        W_x = 2 ** jnp.linspace(-8, 0, 16)
         W_r = jnp.stack(jnp.meshgrid(*([W_x] * r_dim)), 0).reshape(r_dim, -1)
         W_r = W_r * 2 * jnp.pi / self.config.wavelength
         r_emb = jnp.concatenate([jnp.sin(r @ W_r), jnp.cos(r @ W_r)], -1)
@@ -282,6 +283,8 @@ class WNet(linen.Module):
         # w = jnp.exp(mu ** 2 / 2 / var)
 
         w = w.reshape(-1, r_dim, modes)
+        R = jnp.sqrt(jnp.sum((r - jnp.asarray([light_source.loc])) ** 2, axis=-1, keepdims=True))
+        w = w / R[..., None]
 
         # theta = SNet(self.config)(h, r, t, light_source, dielectric_fn)
         # w = jnp.stack([jnp.sin(theta), jnp.cos(theta)], 1) * w
@@ -303,7 +306,7 @@ class MaxwellModel(linen.Module):
         W_h = jax.random.normal(rng, (self.config.mem_len, self.config.features))
         # g_h = jnp.linspace(-1., 1., self.config.mem_len)[:, None]
         # h_i = jnp.exp(g_h) * W_h
-        h_i = jnp.sqrt(1 / self.config.r_dim) * W_h
+        h_i = jnp.sqrt(1 / 3) * W_h
         # h_i = jnp.sqrt(1 / self.config.features) * W_h
         # W_h = jax.random.uniform(rng, (self.config.mem_len, self.config.features))
         # h_i = 2 * (W_h - 0.5)
@@ -387,7 +390,7 @@ class MaxwellModel(linen.Module):
         # Ax = curl_curl_E - z * E_field
 
         def dot_J_fn(_r, _t):
-            _, dot_J = jax.jvp(lambda some_t: light_source(_r, some_t), [_t + 0j], [jnp.ones_like(_t) + 0j])
+            _, dot_J = jax.jvp(lambda some_t: light_source.get_current(_r, some_t), [_t + 0j], [jnp.ones_like(_t) + 0j])
             return dot_J
 
         # J = light_source(r, t)
@@ -474,7 +477,6 @@ class MaxwellModel(linen.Module):
 def create(config: MaxwellModelConfig):
     # layers = [NPILayer(config) for i in range(config.T)]
     # npi = NPI(config, layers)
-    features, r_dim = config.features, config.r_dim
 
     # def mlp():
     #     return MLP([features, features, r_dim], act_fun=linen.tanh,
@@ -608,7 +610,7 @@ def create(config: MaxwellModelConfig):
         E_pred = obs_ic['E_field']
         E_target = light_source.get_fields(ic_r, ic_t)
         imp_weights = jnp.sum((ic_r - loc) ** 2, axis=-1, keepdims=True)
-        err_ic = jnp.sum(jnp.abs(E_pred - E_target) ** 2 * imp_weights)
+        err_ic = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
         # err_ic = 0.
         # rng, key = jax.random.split(rng)
         # source_r, source_t = light_source.sample(key)

@@ -29,3 +29,9 @@ class DielectricEllipse(GenericMaterial):
         eps_r = jnp.where(ellipse[:, None], self.eps_max, eps_r)
         return eps_r
 
+
+class DielectricVacuum(GenericMaterial):
+    eps_max: chex.Scalar = 1.
+
+    def __call__(self, r, *args, **kwargs):
+        return jnp.ones(r.shape)

@@ -8,12 +8,7 @@ from flax.struct import PyTreeNode
 from ng import au_const
 
 
-class GenericSource(PyTreeNode):
-    def __call__(self, *args, **kwargs):
-        raise NotImplementedError
-
-
-class ElectronSource(GenericSource):
+class ElectronSource(PyTreeNode):
     mu: chex.Array
     sigma: chex.Array
     p: chex.Array
@@ -42,18 +37,21 @@ class ElectronSource(GenericSource):
         return psi
 
 
-class CWSource(GenericSource):
+class CWSource(PyTreeNode):
     loc: Tuple
     w: Tuple
     I0: chex.Array
-    k0: chex.Array
+    k0: chex.Scalar
     omega: chex.Scalar
     t_i: chex.Scalar = 0.
     t_f: chex.Scalar = 1.
     c: chex.Scalar = 1.
     eps_0: chex.Scalar = 1.
 
-    def __call__(self, r, t, *args, **kwargs):
+    def get_current(self, r, t, *args, **kwargs):
+        raise NotImplementedError
+
+    def get_charge(self, r, t, *args, **kwargs):
         raise NotImplementedError
 
 
@@ -92,7 +90,7 @@ class DipoleSource(CWSource):
         return r, t
 
     def get_dipole_moment(self, t):
-        return self.I0 * jnp.sin(self.omega * t)
+        return self.I0 / self.omega * jnp.sin(self.omega * t)
 
     def get_potentials(self, r, t):
         loc = jnp.asarray([self.loc])
@@ -118,12 +116,16 @@ class DipoleSource(CWSource):
         E = -grad_phi - dot_A
         return E
 
-    def __call__(self, r, t, *args, **kwargs):
+    def get_charge(self, r, t, *args, **kwargs):
         delta_r = jnp.alltrue(jnp.equal(r, jnp.asarray([self.loc])), axis=-1, keepdims=True)
-        return self.I0 * delta_r * jnp.exp(-1j * self.omega * t)
+        return delta_r
+
+    def get_current(self, r, t, *args, **kwargs):
+        delta_r = jnp.alltrue(jnp.equal(r, jnp.asarray([self.loc])), axis=-1, keepdims=True)
+        return delta_r * self.I0 * jnp.cos(self.omega * t)
 
 
-class GaussianPulseSource(GenericSource):
+class GaussianPulseSource(PyTreeNode):
     loc: chex.Array
     w_y: chex.Scalar
     t0: chex.Scalar
