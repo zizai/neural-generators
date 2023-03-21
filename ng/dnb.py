@@ -30,13 +30,11 @@ class DynamicNeuralBasis(linen.Module):
         Q = self.param('Q', linen.initializers.normal(1 / x_dim), (x_dim, self.features))
         K = self.param('K', linen.initializers.normal(1 / h_dim), (h_dim, self.features))
         V = self.param('V', linen.initializers.normal(1 / h_dim), (h_dim, self.features))
-        log_scale = self.param('log_scale', linen.initializers.zeros, (self.features,))
-        scale = jnp.power(10., log_scale)
-        V = scale * V
+        g = self.param('log_scale', linen.initializers.zeros, (self.features,))
 
         query = x @ Q
         key = kv @ K if kv is not None else K
-        value = kv @ V if kv is not None else V
+        value = jnp.exp(g) * (kv @ V) if kv is not None else jnp.exp(g) * V
         query, key, value = [d.reshape(batch_size, self.heads, -1, k_dim) for d in (query, key, value)]
 
         if self.layer_norm:
@@ -92,3 +90,23 @@ class FourierNeuralBasis(linen.Module):
         out = jnp.matmul(c, value) / self.mem_len
         out = out.reshape(-1, self.features)
         return out
+
+
+class DNBLayer(linen.Module):
+    features: int
+
+    @linen.compact
+    def __call__(self, h, x):
+        features = self.features
+        heads = int(features // 32)
+
+        h = linen.silu(linen.Dense(features)(h))
+        h = linen.Dense(features)(h) + h
+        x = DynamicNeuralBasis(heads, features)(x, h) + x
+        # x = linen.LayerNorm()(x)
+        x0 = x
+        x = linen.silu(linen.Dense(features)(x))
+        x = linen.Dense(features)(x) + x0
+        # x = linen.LayerNorm()(x)
+
+        return h, x

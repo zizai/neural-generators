@@ -12,6 +12,8 @@ class BaseTrainer(object):
                  config,
                  save_video: bool = False):
         self.config = config
+        self.name = config.name
+        self.seed = config.seed
 
         data_dir = os.environ.get('NG_DATA_PATH') or os.path.expanduser('~/ng_data')
         time_start = datetime.now().__format__('%Y-%m-%d_%H-%M-%S')
@@ -32,10 +34,8 @@ class BaseTrainer(object):
         np.random.seed(config.seed)
         random.seed(config.seed)
 
-        self.name = config.name
         self.save_dir = save_dir
         self.checkpoint_dir = checkpoint_dir
-        self.seed = config.seed
 
     def train(self, *args, **kwargs):
         raise NotImplementedError
