@@ -52,36 +52,6 @@ class Dataset(object):
         return self.ts[choices], self.labels[choices], self.ys[choices]
 
 
-class FFMLP(linen.Module):
-    features: int
-    n_classes: int
-    n_layers: int = 5
-
-    @linen.compact
-    def __call__(self, t, label):
-        features = self.features
-
-        x = linen.one_hot(label, self.n_classes).reshape(-1, self.n_classes)
-
-        W_t = 2 ** jnp.linspace(-8, 8, features)
-        W_t = 2 * jnp.pi / W_t.reshape(1, features)
-        t_emb = jnp.concatenate([jnp.sin(t @ W_t), jnp.cos(t @ W_t)], -1)
-
-        x = jnp.concatenate([x, t_emb], axis=-1)
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
-
-        for i in range(self.n_layers):
-            x0 = x
-            x = linen.silu(linen.Dense(features)(x0))
-            x = linen.Dense(features)(x) + x0
-
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
-        y = linen.Dense(1)(x)
-        return y
-
-
 class DNBNet(linen.Module):
     features: int
     n_classes: int
@@ -123,6 +93,61 @@ class DNBNet(linen.Module):
         return y
 
 
+class FourierMLP(linen.Module):
+    features: int
+    n_classes: int
+    n_layers: int = 5
+
+    @linen.compact
+    def __call__(self, t, label):
+        features = self.features
+
+        x = linen.one_hot(label, self.n_classes).reshape(-1, self.n_classes)
+
+        W_t = 2 ** jnp.linspace(-8, 8, features)
+        W_t = 2 * jnp.pi / W_t.reshape(1, features)
+        t_emb = jnp.concatenate([jnp.sin(t @ W_t), jnp.cos(t @ W_t)], -1)
+
+        x = jnp.concatenate([x, t_emb], axis=-1)
+        x = linen.silu(linen.Dense(features * 2)(x))
+        x = linen.Dense(features)(x)
+
+        for i in range(self.n_layers):
+            x0 = x
+            x = linen.silu(linen.Dense(features)(x0))
+            x = linen.Dense(features)(x) + x0
+
+        x = linen.silu(linen.Dense(features * 2)(x))
+        x = linen.Dense(features)(x)
+        y = linen.Dense(1)(x)
+        return y
+
+
+class SIREN(linen.Module):
+    features: int
+    n_classes: int
+    n_layers: int = 5
+    omega0: float = 1.
+
+    @linen.compact
+    def __call__(self, t, label):
+        features = self.features
+
+        x = linen.one_hot(label, self.n_classes).reshape(-1, self.n_classes)
+
+        def kernel_init(rng, shape, _):
+            return jax.random.uniform(rng, shape, minval=-1., maxval=1.) * jnp.sqrt(6 / shape[0])
+
+        x = jnp.concatenate([t, x], axis=-1)
+        x = jnp.sin(linen.Dense(features, kernel_init=kernel_init)(x) * self.omega0)
+
+        for i in range(self.n_layers):
+            x = jnp.sin(linen.Dense(features, kernel_init=kernel_init)(x))
+
+        y = linen.Dense(1)(x)
+        return y
+
+
 def build_dnb_net(rng, batch, features, n_classes, lr):
     t, x, _ = batch
 
@@ -158,10 +183,43 @@ def build_dnb_net(rng, batch, features, n_classes, lr):
     return train_state, train_step, eval_step
 
 
-def build_ff_mlp(rng, batch, features, n_classes, lr):
+def build_fourier_mlp(rng, batch, features, n_classes, lr):
     t, x, _ = batch
 
-    model_def = FFMLP(features, n_classes)
+    model_def = FourierMLP(features, n_classes)
+    rng, key = jax.random.split(rng)
+    variables = model_def.init(key, t, x)
+    params = variables['params']
+
+    opt = optax.adam(lr)
+    train_state = TrainState.create(apply_fn=model_def.apply, params=params, stats={}, opt=opt)
+
+    @jax.jit
+    def train_step(batch, state):
+        t_batch, label_batch, y_batch = batch
+
+        def loss_fn(_p, _t, _label, _y):
+            _y_pred = model_def.apply({'params': _p}, _t, _label)
+            loss = jnp.sum((_y_pred - _y) ** 2)
+            return loss, dict(loss=loss)
+
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+        (loss, stats), grads = grad_fn(state.params, t_batch, label_batch, y_batch)
+        state, updates = state.apply_gradients(grads=grads)
+        return state, stats
+
+    @jax.jit
+    def eval_step(batch, state):
+        t_batch, x_batch, y_batch = batch
+        return model_def.apply({'params': state.params}, t_batch, x_batch)
+
+    return train_state, train_step, eval_step
+
+
+def build_siren(rng, batch, features, n_classes, lr):
+    t, x, _ = batch
+
+    model_def = SIREN(features, n_classes)
     rng, key = jax.random.split(rng)
     variables = model_def.init(key, t, x)
     params = variables['params']
@@ -193,7 +251,7 @@ def build_ff_mlp(rng, batch, features, n_classes, lr):
 
 def run():
     seed = 47
-    batch_size = 500
+    batch_size = 1000
     data_size = 50000
     features = 256
     n_classes = 10
@@ -208,7 +266,8 @@ def run():
 
     rng, key = jax.random.split(rng)
     # train_state, train_step, eval_step = build_dnb_net(key, batch, features, n_classes, lr)
-    train_state, train_step, eval_step = build_ff_mlp(key, batch, features, n_classes, lr)
+    # train_state, train_step, eval_step = build_fourier_mlp(key, batch, features, n_classes, lr)
+    train_state, train_step, eval_step = build_siren(key, batch, features, n_classes, lr)
 
     eval_batch = dataset.sample(batch_size * n_classes)
     y_pred = eval_step(eval_batch, train_state)
@@ -235,7 +294,7 @@ def run():
         #     result = onp.concatenate([onp.asarray(omega_pred), onp.ones(omega_pred.shape, dtype=onp.int32) * step], -1)
         #     omega_hist.append(result)
 
-    eval_batch = dataset.sample(batch_size * 4)
+    eval_batch = dataset.sample(batch_size * n_classes)
     y_pred = eval_step(eval_batch, train_state)
     target_data = onp.concatenate([*eval_batch, jnp.ones(y_pred.shape)], -1)
     pred_data = onp.concatenate([*eval_batch[:2], y_pred, jnp.zeros(y_pred.shape)], -1)
