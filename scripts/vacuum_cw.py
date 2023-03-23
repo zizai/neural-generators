@@ -51,15 +51,14 @@ def run(init_sigma):
     omega = 2 * np.pi * c / wavelength
     eps_0 = 1.
     k0 = 2 * np.pi / wavelength
-    # t_f = t_f * wavelength
-    Lx = 50
-    Ly = 50
+    Lx = 6
+    Ly = 6
 
     t_domain = (0., wavelength / c * fs_l)
     x_domain = (-0.5 * Lx, 1.5 * Lx)
     y_domain = (-0.2 * Ly, 0.8 * Ly)
     dt = 0.1 * fs_l
-    E0 = 1.
+    E0 = 10.
 
     source_E0 = jnp.array([[jnp.sin(beta), jnp.cos(beta), 0.]]) * E0
     source_k0 = jnp.array([[jnp.cos(beta), jnp.sin(beta), 0.]]) * k0
@@ -101,8 +100,8 @@ def run(init_sigma):
         pos_z = jnp.zeros((n_samples, 1))
         r = jnp.concatenate([pos_x, pos_y, pos_z], axis=-1)
 
-        # t = jnp.zeros((n_samples, 1)) + t_i
-        t = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_domain[1] - t_domain[0]) + t_domain[0]
+        t = jnp.zeros((n_samples, 1)) + t_domain[0]
+        # t = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_domain[1] - t_domain[0]) + t_domain[0]
         v = jax.random.normal(keys.pop(), (n_samples, 2)) * 0.1 * c
         v = jnp.concatenate([v, jnp.zeros((n_samples, 1))], axis=-1)
         return r, t, v
@@ -151,8 +150,8 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=None)
     parser.add_argument('--features', type=int, default=64)
     parser.add_argument('--n_layers', type=int, default=5)
-    parser.add_argument('--n_samples', type=int, default=400)
-    parser.add_argument('--sample_length', type=int, default=10)
+    parser.add_argument('--n_samples', type=int, default=5000)
+    parser.add_argument('--sample_length', type=int, default=1)
     parser.add_argument('--train_steps', type=int, default=1000)
     args = parser.parse_args()
 

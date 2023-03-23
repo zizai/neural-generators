@@ -12,6 +12,7 @@ from ng import au_const
 from ng.materials import GenericMaterial, DielectricVacuum
 from ng.ng_layer import NeuralGeneratorLayer
 from ng.potentials import GenericPotential
+from ng.siren import SIREN
 from ng.sources import CWSource
 from ng.train_state import TrainState
 
@@ -247,13 +248,32 @@ class AmuNet(linen.Module):
 
     @linen.compact
     def __call__(self, h, r, t, light_source, dielectric_fn):
-        K = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        B = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        W = WNet(self.config, 4)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        # K = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        # B = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        # W = WNet(self.config, 4)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        #
+        # x_mu = jnp.concatenate([t, r], -1)
+        # A_mu = W * jnp.exp(1j * (jnp.sum(K * x_mu[:, None], axis=-1, keepdims=True) + B))
+        # A_mu = jnp.mean(A_mu, 1)
 
-        x_mu = jnp.concatenate([t, r], -1)
-        A_mu = W * jnp.exp(1j * (jnp.sum(K * x_mu[:, None], axis=-1, keepdims=True) + B))
-        A_mu = jnp.mean(A_mu, 1)
+        features = self.config.features
+        n_layers = self.config.n_layers
+        c = self.config.c
+
+        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        # loc = jnp.asarray([light_source.loc])
+        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        x = jnp.concatenate([c * t, r, x], -1)
+
+        A_mu = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi,  out_dim=4)(x)
+        # phi = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi, out_dim=1)(x)
+        # A = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi, out_dim=3)(x)
+        # A_mu = jnp.concatenate([phi, A], -1)
+
+        # loc = jnp.asarray([light_source.loc])
+        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        # A_mu /= R
+
         return A_mu
 
 
@@ -433,30 +453,33 @@ def create(config: MaxwellPotentialModelConfig):
 
         rng, key = jax.random.split(rng)
         h_i = model.init_state(rng)
-        h_traj, r_traj, t_traj, v_traj = sample_train(params, key, h_i, r_i, t_i, v_i, light_source, dielectric_fn, lamb)
-        # h_traj, r_traj, t_traj = data
+        # h_traj, r_traj, t_traj, v_traj = sample_train(params, key, h_i, r_i, t_i, v_i, light_source, dielectric_fn, lamb)
 
-        rng, *keys = jax.random.split(rng, h_traj.shape[0] + 1)
-        obs_traj = get_observables(params, jnp.asarray(keys), h_traj, r_traj, t_traj, light_source, dielectric_fn)
-
-        err_pde = obs_traj['err_em']
-        err_pde = jnp.sum(err_pde)
+        # rng, *keys = jax.random.split(rng, h_traj.shape[0] + 1)
+        # obs_traj = get_observables(params, jnp.asarray(keys), h_traj, r_traj, t_traj, light_source, dielectric_fn)
+        # err_pde = obs_traj['err_em']
+        # err_pde = jnp.sum(err_pde)
 
         rng, key = jax.random.split(rng)
         loc = jnp.asarray([light_source.loc])
-        t_vac = jnp.zeros(t_traj.shape[1:]) + config.t_domain[0]
-        x_vac = jax.random.uniform(key, t_traj.shape[1:], minval=config.x_domain[0], maxval=config.x_domain[1])
-        y_vac = jax.random.uniform(key, t_traj.shape[1:], minval=config.y_domain[0], maxval=config.y_domain[1])
-        z_vac = jnp.zeros(t_traj.shape[1:])
+        t_vac = jnp.zeros(t_i.shape) + config.t_domain[0]
+        x_vac = jax.random.uniform(key, t_i.shape, minval=config.x_domain[0], maxval=config.x_domain[1])
+        y_vac = jax.random.uniform(key, t_i.shape, minval=config.y_domain[0], maxval=config.y_domain[1])
+        z_vac = jnp.zeros(t_i.shape)
         r_vac = jnp.concatenate([x_vac, y_vac, z_vac], -1)
 
         phi_pred, A_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum())
+        # obs = model.apply({'params': params}, key, h_i, r_vac, t_vac, light_source, dielectric_fn, method=model.get_observables)
+        # E_pred = obs['E_field']
+        # err_pde = jnp.sum(obs['err_em'])
         E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_fields)
+        err_pde = 0.
 
         phi_target, A_target = light_source.get_potentials(r_vac, t_vac)
         E_target = light_source.get_fields(r_vac, t_vac)
 
         imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
+        # imp_weights = 1.
         err_sup = jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
         err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
         err_sup += jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
