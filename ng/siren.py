@@ -16,7 +16,7 @@ class SIRENLayer(linen.Module):
         omega0 = self.omega0
 
         def kernel_init(rng, shape, _):
-            return jax.random.uniform(rng, shape, minval=-1., maxval=1.) * jnp.sqrt(6 / shape[0] / omega0 ** 2)
+            return jax.random.uniform(rng, shape, minval=-1., maxval=1.) * jnp.sqrt(6 / shape[0]) / omega0
 
         kernel = self.param('kernel',
                             kernel_init,
@@ -28,7 +28,9 @@ class SIRENLayer(linen.Module):
                           (features,),
                           inputs.dtype)
 
-        y = jax.lax.dot_general(omega0 * inputs, kernel, (((inputs.ndim - 1,), (0,)), ((), ())))
+        x = jnp.asarray(omega0 * inputs, dtype=inputs.dtype)
+        kernel = jnp.asarray(kernel, dtype=inputs.dtype)
+        y = jax.lax.dot_general(x, kernel, (((inputs.ndim - 1,), (0,)), ((), ())))
 
         y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
         return jnp.sin(y)
@@ -53,25 +55,25 @@ class SIREN(linen.Module):
             label = linen.one_hot(label, self.n_classes).reshape(-1, self.n_classes)
             x = jnp.concatenate([x, label], axis=-1)
 
-        # x = jnp.sin(linen.Dense(features, kernel_init=kernel_init)(x) * omega0)
+        x = jnp.sin(linen.Dense(features, kernel_init=kernel_init)(x * omega0))
 
         for i in range(self.n_layers):
             x = SIRENLayer(features, omega0)(x)
 
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x = linen.silu(linen.Dense(features * 2)(x))
-        x = linen.Dense(features)(x)
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x = linen.silu(linen.Dense(features * 2)(x))
+        # x = linen.Dense(features)(x)
 
         y = linen.Dense(self.out_dim)(x)
         return y

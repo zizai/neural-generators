@@ -22,7 +22,7 @@ from ng.sources import DipoleSource
 
 def plot_fields(E, file_prefix='vacuum_cw'):
     Ex = E[..., 0]
-    Ex_max = np.abs(Ex.real).max()
+    Ex_max = Ex.real.std() * 3
     divnorm = colors.TwoSlopeNorm(vmin=-Ex_max, vcenter=0., vmax=Ex_max)
     plt.imshow(np.flipud(Ex.real), cmap='RdBu', norm=divnorm)
     # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
@@ -32,7 +32,7 @@ def plot_fields(E, file_prefix='vacuum_cw'):
     plt.clf()
 
     Ey = E[..., 1]
-    Ey_max = np.abs(Ey.real).max()
+    Ey_max = Ey.real.std() * 3
     divnorm = colors.TwoSlopeNorm(vmin=-Ey_max, vcenter=0., vmax=Ey_max)
     plt.imshow(np.flipud(Ey.real), cmap='RdBu', norm=divnorm)
     # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
@@ -120,13 +120,6 @@ def run(init_sigma):
         return r, t, v
 
     trainer = MaxwellTrainer(trainer_config, random_field_init, model_config, debug=False)
-    # obs_traj, r_traj, t_traj = trainer.eval()
-    # r_i, r_f = r_traj[0], r_traj[-1]
-    # x_i = r_i[:, 0].mean()
-    # x_f = r_f[:, 0].mean()
-    # v_pred = (x_f.mean() - center_x) / t_f
-    # print(f'electron velocity (a.u.): {v_pred} (estimated) vs {beta * au_const.c} (truth)')
-    # print(f'electron velecity (nm/fs): {v_pred / (au_const.nm / au_const.fs)} nm/fs')
 
     trainer.train(args.train_steps)
 

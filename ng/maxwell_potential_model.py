@@ -260,19 +260,42 @@ class AmuNet(linen.Module):
         n_layers = self.config.n_layers
         c = self.config.c
 
-        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
-        # loc = jnp.asarray([light_source.loc])
-        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
-        x = jnp.concatenate([c * t, r, x], -1)
+        mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        loc = jnp.asarray([light_source.loc])
+        R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        x = jnp.concatenate([c * t, R, mat], -1)
 
-        A_mu = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi,  out_dim=4)(x)
-        # phi = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi, out_dim=1)(x)
-        # A = SIREN(features, n_layers=n_layers, omega0=2 * jnp.pi, out_dim=3)(x)
-        # A_mu = jnp.concatenate([phi, A], -1)
+        # A_mu = SIREN(features, n_layers=n_layers,  out_dim=4)(x)
+        # A_0 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
+        # A_1 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
+        # A_2 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
+        # A_3 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
+        # A_mu = jnp.concatenate([A_0, A_1, A_2, A_3], -1)
 
-        # loc = jnp.asarray([light_source.loc])
-        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
-        # A_mu /= R
+        phi = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
+        A = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
+
+        x = jnp.concatenate([r / (R + 1e-6), mat], -1)
+        x = linen.silu(linen.Dense(features)(x))
+        x = linen.Dense(features)(x)
+
+        x0 = x
+        x = linen.silu(linen.Dense(features)(x0))
+        x = linen.Dense(features)(x) + x0
+
+        x0 = x
+        x = linen.silu(linen.Dense(features)(x0))
+        x = linen.Dense(features)(x) + x0
+
+        x0 = x
+        x = linen.silu(linen.Dense(features)(x0))
+        x = linen.Dense(features)(x) + x0
+
+        x = linen.silu(linen.Dense(features * 2)(x))
+        w = linen.Dense(4)(x)
+
+        A_mu = jnp.concatenate([w[..., 0:1] * phi, w[..., 1:4] * A], -1)
+        # A_mu = w * A_mu
 
         return A_mu
 
@@ -463,6 +486,7 @@ def create(config: MaxwellPotentialModelConfig):
         rng, key = jax.random.split(rng)
         loc = jnp.asarray([light_source.loc])
         t_vac = jnp.zeros(t_i.shape) + config.t_domain[0]
+        # t_vac = jax.random.uniform(key, t_i.shape, minval=config.t_domain[0], maxval=config.t_domain[1])
         x_vac = jax.random.uniform(key, t_i.shape, minval=config.x_domain[0], maxval=config.x_domain[1])
         y_vac = jax.random.uniform(key, t_i.shape, minval=config.y_domain[0], maxval=config.y_domain[1])
         z_vac = jnp.zeros(t_i.shape)
@@ -478,8 +502,8 @@ def create(config: MaxwellPotentialModelConfig):
         phi_target, A_target = light_source.get_potentials(r_vac, t_vac)
         E_target = light_source.get_fields(r_vac, t_vac)
 
-        imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
-        # imp_weights = 1.
+        # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
+        imp_weights = 1.
         err_sup = jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
         err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
         err_sup += jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
