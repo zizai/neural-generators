@@ -75,7 +75,7 @@ class SIREN(linen.Module):
         # x = linen.silu(linen.Dense(features * 2)(x))
         # x = linen.Dense(features)(x)
 
-        y = linen.Dense(self.out_dim)(x)
+        y = linen.Dense(self.out_dim, kernel_init=kernel_init)(x)
         return y
 
 

@@ -20,7 +20,7 @@ from ng.maxwell_trainer import maxwell_trainer_config, MaxwellTrainer
 from ng.sources import DipoleSource
 
 
-def plot_fields(E, file_prefix='vacuum_cw'):
+def plot_fields(E, file_prefix='vacuum_cw_E'):
     Ex = E[..., 0]
     Ex_max = Ex.real.std() * 3
     divnorm = colors.TwoSlopeNorm(vmin=-Ex_max, vcenter=0., vmax=Ex_max)
@@ -28,7 +28,7 @@ def plot_fields(E, file_prefix='vacuum_cw'):
     # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
     plt.colorbar()
     # plt.show()
-    plt.savefig('./' + file_prefix + '_Ex.png')
+    plt.savefig('./' + file_prefix + 'x.png')
     plt.clf()
 
     Ey = E[..., 1]
@@ -38,7 +38,7 @@ def plot_fields(E, file_prefix='vacuum_cw'):
     # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
     plt.colorbar()
     # plt.show()
-    plt.savefig('./' + file_prefix + '_Ey.png')
+    plt.savefig('./' + file_prefix + 'y.png')
     plt.clf()
 
 
@@ -58,7 +58,7 @@ def run(init_sigma):
     x_domain = (-0.5 * Lx, 1.5 * Lx)
     y_domain = (-0.2 * Ly, 0.8 * Ly)
     dt = 0.1 * fs_l
-    E0 = 10.
+    E0 = 1.
 
     source_E0 = jnp.array([[jnp.sin(beta), jnp.cos(beta), 0.]]) * E0
     source_k0 = jnp.array([[jnp.cos(beta), jnp.sin(beta), 0.]]) * k0
@@ -99,7 +99,10 @@ def run(init_sigma):
         pos_y = jax.random.uniform(keys.pop(), (n_samples, 1), minval=y_domain[0], maxval=y_domain[1])
         pos_z = jnp.zeros((n_samples, 1))
         r = jnp.concatenate([pos_x, pos_y, pos_z], axis=-1)
+        # r_l = jax.random.normal(keys.pop(), (n_samples // 10, 3)) * 1e-2
+        # r = jnp.concatenate([r, r_l], 0)
 
+        n_samples = r.shape[0]
         t = jnp.zeros((n_samples, 1)) + t_domain[0]
         # t = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_domain[1] - t_domain[0]) + t_domain[0]
         v = jax.random.normal(keys.pop(), (n_samples, 2)) * 0.1 * c
@@ -125,17 +128,30 @@ def run(init_sigma):
 
     ic = grid_field_init(200, trainer.rng)
     ic_r, ic_t, _ = ic
+
     ic_E = light_source.get_fields(ic_r, ic_t)
     ic_E = ic_E.reshape(100, 200, -1)
-    plot_fields(ic_E, 'vacuum_cw_ic')
+    plot_fields(ic_E, 'vacuum_cw_ic_E')
+
+    # rho = light_source.get_charge(ic_r, ic_t)
+    # rho = rho.reshape(100, 200, -1)
+    # plt.imshow(np.flipud(rho), cmap='RdBu')
+    # # plt.imshow(np.flipud(Ex.real), cmap='RdBu')
+    # plt.colorbar()
+    # # plt.show()
+    # plt.savefig('./vacuum_cw_ic_rho.png')
+    # plt.clf()
+    #
+    # j = light_source.get_current(ic_r, ic_t)
+    # j = j.reshape(100, 200, -1)
+    # plot_fields(j, 'vacuum_cw_ic_j')
 
     preds, rs, ts, vs = trainer.eval(*ic)
     E_pred = preds[0].reshape(100, 200, -1)
-    plot_fields(E_pred, f'vacuum_cw_t_{ts[0].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}')
+    plot_fields(E_pred, f'vacuum_cw_t_{ts[0].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}_E')
 
 
 if __name__ == '__main__':
-    jax.config.update("jax_enable_x64", False)
 
     import argparse
 
@@ -146,7 +162,10 @@ if __name__ == '__main__':
     parser.add_argument('--n_samples', type=int, default=5000)
     parser.add_argument('--sample_length', type=int, default=1)
     parser.add_argument('--train_steps', type=int, default=1000)
+    parser.add_argument('--precision', type=str, default='double')
     args = parser.parse_args()
+
+    jax.config.update("jax_enable_x64", True if args.precision == 'double' else False)
 
     fs_l = 1 / (1 / 3e8 * 1e-6 / 1e-15)
 

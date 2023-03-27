@@ -33,7 +33,7 @@ class MaxwellPotentialModelConfig(struct.PyTreeNode):
     model_type: str = 'ng'
     envelope: str = 'gaussian'
     ic_weight: float = 10.
-    eom: str = 'bohm'
+    gauge_choice: str = 'lorentz'
     substeps: int = 5
     dtype: typing.Any = jnp.float_
     log_domain: bool = True
@@ -127,7 +127,7 @@ class KNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(r, dielectric_fn)
+        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -162,7 +162,7 @@ class BNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(r, dielectric_fn)
+        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -191,7 +191,7 @@ class WNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(r, dielectric_fn)
+        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -340,33 +340,40 @@ class MaxwellPotentialModel(linen.Module):
         E_field = self.get_fields(h, r, t, light_source, dielectric_fn)
 
         def grad_phi_op(_r, _t):
-            phi_closure = lambda some_r, _t: self.get_phi(h, some_r, _t, light_source, dielectric_fn)
-            grad_phi = jax.vmap(jax.jacfwd(phi_closure))(_r[:, None], _t[:, None])
-            return grad_phi.reshape(_r.shape)
+            phi_closure = lambda some_r, some_t: self.get_phi(h, some_r, some_t, light_source, dielectric_fn)
+            grad_phi = jax.vmap(jax.jacfwd(phi_closure))(_r[:, None], _t[:, None]).reshape(_r.shape)
+            return grad_phi
 
         def grad_A_op(_r, _t):
-            _, grad_A = jax.jvp(lambda some_r: self.get_A(h, some_r, _t, light_source, dielectric_fn),
-                                [_r], [jnp.ones_like(_r)])
+            A_closure = lambda some_r, some_t: self.get_A(h, some_r, some_t, light_source, dielectric_fn)
+            grad_A = jax.vmap(jax.jacfwd(A_closure))(_r[:, None], _t[:, None]).reshape(_r.shape + (3,))
             return grad_A
 
         def div_A_op(_r, _t):
             grad_A = grad_A_op(_r, _t)
-            return grad_A.sum(axis=-1, keepdims=True)
+            return jnp.trace(grad_A, axis1=-2, axis2=-1).reshape(_t.shape)
+
+        def grad_div_A_op(_r, _t):
+            grad_div_A = jax.vmap(jax.jacfwd(div_A_op))(_r[:, None], _t[:, None]).reshape(_r.shape)
+            return grad_div_A
 
         def lap_phi_op(_r, _t):
-            _, lap_phi = jax.jvp(lambda some_r: grad_phi_op(some_r, _t),
-                                 [_r], [jnp.ones_like(_r)])
-            return lap_phi.sum(axis=-1, keepdims=True)
+            lap_phi = jax.vmap(jax.jacfwd(grad_phi_op))(_r[:, None], _t[:, None]).reshape(_r.shape + (3,))
+            return jnp.trace(lap_phi, axis1=-2, axis2=-1).reshape(_t.shape)
 
         def lap_A_op(_r, _t):
-            _, lap_A = jax.jvp(lambda some_r: grad_A_op(some_r, _t),
-                               [_r], [jnp.ones_like(_r)])
-            return lap_A.sum(axis=-1, keepdims=True)
+            lap_A = jax.vmap(jax.jacfwd(grad_A_op))(_r[:, None], _t[:, None]).reshape(_r.shape + (3, 3))
+            return jnp.trace(lap_A, axis1=-2, axis2=-1).reshape(_r.shape)
 
         def dot_phi_op(_r, _t):
             _, dot_phi = jax.jvp(lambda some_t: self.get_phi(h, _r, some_t, light_source, dielectric_fn),
                                  [_t], [jnp.ones_like(_t)])
             return dot_phi
+
+        def dot_grad_phi_op(_r, _t):
+            _, dot_grad_phi = jax.jvp(lambda some_t: grad_phi_op(_r, some_t),
+                                      [_t], [jnp.ones_like(_t)])
+            return dot_grad_phi
 
         def ddot_phi_op(_r, _t):
             _, ddot_phi = jax.jvp(lambda some_t: dot_phi_op(_r, some_t),
@@ -378,6 +385,11 @@ class MaxwellPotentialModel(linen.Module):
                                [_t], [jnp.ones_like(_t)])
             return dot_A
 
+        def dot_div_A_op(_r, _t):
+            _, dot_div_A = jax.jvp(lambda some_t: div_A_op(_r, some_t),
+                                   [_t], [jnp.ones_like(_t)])
+            return dot_div_A
+
         def ddot_A_op(_r, _t):
             _, ddot_A = jax.jvp(lambda some_t: dot_A_op(_r, some_t),
                                 [_t], [jnp.ones_like(_t)])
@@ -386,13 +398,19 @@ class MaxwellPotentialModel(linen.Module):
         eps_r = dielectric_fn(r)[..., 0:1]
         rho = light_source.get_charge(r, t)
         j = light_source.get_current(r, t)
-        loss_phi = lap_phi_op(r, t) - eps_r / (c ** 2) * ddot_phi_op(r, t) + rho / eps_0
-        loss_A = lap_A_op(r, t) - eps_r / (c ** 2) * ddot_A_op(r, t) + j / eps_0 / c ** 2
-        loss_gauge = div_A_op(r, t) + eps_r / (c ** 2) * dot_phi_op(r, t)
 
-        err_em = jnp.sum(jnp.real(loss_phi.conj() * loss_phi))
-        err_em += jnp.sum(jnp.real(loss_A.conj() * loss_A))
-        err_em += jnp.sum(jnp.real(loss_gauge.conj() * loss_gauge))
+        if self.config.gauge_choice == 'lorentz':
+            res1 = lap_phi_op(r, t) - eps_r / (c ** 2) * ddot_phi_op(r, t) + rho / eps_0
+            res2 = lap_A_op(r, t) - eps_r / (c ** 2) * ddot_A_op(r, t) + j / eps_0 / c ** 2
+            res3 = div_A_op(r, t) + eps_r / (c ** 2) * dot_phi_op(r, t)
+            err_em = jnp.sum(jnp.real(res1.conj() * res1))
+            err_em += jnp.sum(jnp.real(res2.conj() * res2))
+            err_em += jnp.sum(jnp.real(res3.conj() * res3))
+        else:
+            res1 = lap_phi_op(r, t) + dot_div_A_op(r, t) + rho / eps_0
+            res2 = (c ** 2) / eps_r * lap_A_op(r, t) - (c ** 2) / eps_r * grad_div_A_op(r, t) - dot_grad_phi_op(r, t) - ddot_A_op(r, t) + j / eps_0
+            err_em = jnp.sum(jnp.real(res1.conj() * res1))
+            err_em += jnp.sum(jnp.real(res2.conj() * res2))
 
         obs = dict(
             E_field=E_field,
@@ -409,8 +427,8 @@ class MaxwellPotentialModel(linen.Module):
         return A_mu[..., 0:1], A_mu[..., 1:4]
 
     def get_fields(self, h, r, t, light_source, dielectric_fn):
-        grad_phi = jax.vmap(jax.jacfwd(lambda _r, _t: self.get_phi(h, _r, _t, light_source, dielectric_fn)))(r[:, None], t[:, None])
-        grad_phi = grad_phi.reshape(r.shape)
+        phi_closure = lambda _r, _t: self.get_phi(h, _r, _t, light_source, dielectric_fn)
+        grad_phi = jax.vmap(jax.jacfwd(phi_closure))(r[:, None], t[:, None]).reshape(r.shape)
         _, dot_A = jax.jvp(lambda _t: self.get_A(h, r, _t, light_source, dielectric_fn),
                            [t], [jnp.ones_like(t)])
         dot_A = dot_A.reshape(r.shape)
@@ -492,23 +510,23 @@ def create(config: MaxwellPotentialModelConfig):
         z_vac = jnp.zeros(t_i.shape)
         r_vac = jnp.concatenate([x_vac, y_vac, z_vac], -1)
 
-        phi_pred, A_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum())
-        # obs = model.apply({'params': params}, key, h_i, r_vac, t_vac, light_source, dielectric_fn, method=model.get_observables)
-        # E_pred = obs['E_field']
-        # err_pde = jnp.sum(obs['err_em'])
-        E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_fields)
-        err_pde = 0.
+        obs = model.apply({'params': params}, key, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_observables)
+        E_pred = obs['E_field']
+        err_pde = jnp.sum(obs['err_em'])
+        # err_pde = 0.
 
+        imp_weights = 1.
+        # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
+        phi_pred, A_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum())
+        # E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_fields)
         phi_target, A_target = light_source.get_potentials(r_vac, t_vac)
         E_target = light_source.get_fields(r_vac, t_vac)
-
-        # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
-        imp_weights = 1.
-        err_sup = jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
+        err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
+        err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
         err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
-        err_sup += jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
+        # err_sup = 0.
 
-        loss = err_pde + err_sup
+        loss = err_pde + 100 * err_sup
         stats = dict(loss=loss, err_pde=err_pde, err_sup=err_sup)
         return loss, stats
 
