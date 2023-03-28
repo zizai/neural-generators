@@ -264,6 +264,7 @@ class AmuNet(linen.Module):
         loc = jnp.asarray([light_source.loc])
         R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
         x = jnp.concatenate([c * t, R, mat], -1)
+        # x = jnp.concatenate([c * t, r, mat], -1)
 
         # A_mu = SIREN(features, n_layers=n_layers,  out_dim=4)(x)
         # A_0 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
@@ -445,7 +446,7 @@ class MaxwellPotentialModel(linen.Module):
         return h, r_next, t_next, v_next
 
 
-def create(config: MaxwellPotentialModelConfig):
+def create_maxwell_potential_model(config: MaxwellPotentialModelConfig):
 
     model = MaxwellPotentialModel(config)
 
@@ -493,7 +494,7 @@ def create(config: MaxwellPotentialModelConfig):
         r_i, t_i, v_i = ic
 
         rng, key = jax.random.split(rng)
-        h_i = model.init_state(rng)
+        h_i = model.init_state(key)
         # h_traj, r_traj, t_traj, v_traj = sample_train(params, key, h_i, r_i, t_i, v_i, light_source, dielectric_fn, lamb)
 
         # rng, *keys = jax.random.split(rng, h_traj.shape[0] + 1)
@@ -501,30 +502,26 @@ def create(config: MaxwellPotentialModelConfig):
         # err_pde = obs_traj['err_em']
         # err_pde = jnp.sum(err_pde)
 
-        rng, key = jax.random.split(rng)
-        loc = jnp.asarray([light_source.loc])
-        t_vac = jnp.zeros(t_i.shape) + config.t_domain[0]
-        # t_vac = jax.random.uniform(key, t_i.shape, minval=config.t_domain[0], maxval=config.t_domain[1])
-        x_vac = jax.random.uniform(key, t_i.shape, minval=config.x_domain[0], maxval=config.x_domain[1])
-        y_vac = jax.random.uniform(key, t_i.shape, minval=config.y_domain[0], maxval=config.y_domain[1])
-        z_vac = jnp.zeros(t_i.shape)
-        r_vac = jnp.concatenate([x_vac, y_vac, z_vac], -1)
+        if isinstance(dielectric_fn, DielectricVacuum):
+            obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, dielectric_fn, method=model.get_observables)
+            E_pred = obs['E_field']
+            err_pde = jnp.sum(obs['err_em'])
+            # err_pde = 0.
 
-        obs = model.apply({'params': params}, key, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_observables)
-        E_pred = obs['E_field']
-        err_pde = jnp.sum(obs['err_em'])
-        # err_pde = 0.
-
-        imp_weights = 1.
-        # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
-        phi_pred, A_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum())
-        # E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, DielectricVacuum(), method=model.get_fields)
-        phi_target, A_target = light_source.get_potentials(r_vac, t_vac)
-        E_target = light_source.get_fields(r_vac, t_vac)
-        err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
-        err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
-        err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
-        # err_sup = 0.
+            imp_weights = 1.
+            # loc = jnp.asarray([light_source.loc])
+            # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
+            phi_pred, A_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, dielectric_fn)
+            # E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, dielectric_fn, method=model.get_fields)
+            phi_target, A_target = light_source.get_potentials(r_i, t_i)
+            E_target = light_source.get_fields(r_i, t_i)
+            err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
+            # err_sup = 0.
+        else:
+            err_pde = 0.
+            err_sup = 0.
 
         loss = err_pde + 100 * err_sup
         stats = dict(loss=loss, err_pde=err_pde, err_sup=err_sup)

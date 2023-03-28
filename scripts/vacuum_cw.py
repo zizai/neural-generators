@@ -43,7 +43,7 @@ def plot_fields(E, file_prefix='vacuum_cw_E'):
 
 
 def run(init_sigma):
-    seed = 47
+    seed = args.seed
 
     beta = 90 / 180 * jnp.pi
     wavelength = 1.5
@@ -92,23 +92,6 @@ def run(init_sigma):
         dtype=jnp.float32
     )
 
-    def random_field_init(n_samples, rng):
-        rng, *keys = jax.random.split(rng, 9)
-
-        pos_x = jax.random.uniform(keys.pop(), (n_samples, 1), minval=x_domain[0], maxval=x_domain[1])
-        pos_y = jax.random.uniform(keys.pop(), (n_samples, 1), minval=y_domain[0], maxval=y_domain[1])
-        pos_z = jnp.zeros((n_samples, 1))
-        r = jnp.concatenate([pos_x, pos_y, pos_z], axis=-1)
-        # r_l = jax.random.normal(keys.pop(), (n_samples // 10, 3)) * 1e-2
-        # r = jnp.concatenate([r, r_l], 0)
-
-        n_samples = r.shape[0]
-        t = jnp.zeros((n_samples, 1)) + t_domain[0]
-        # t = jax.random.uniform(keys.pop(), (n_samples, 1)) * (t_domain[1] - t_domain[0]) + t_domain[0]
-        v = jax.random.normal(keys.pop(), (n_samples, 2)) * 0.1 * c
-        v = jnp.concatenate([v, jnp.zeros((n_samples, 1))], axis=-1)
-        return r, t, v
-
     def grid_field_init(n_x, rng):
         n_y = n_x // 2
         pos_x = jnp.linspace(x_domain[0], x_domain[1], n_x)
@@ -122,7 +105,7 @@ def run(init_sigma):
         v = jnp.concatenate([v, jnp.zeros((n_x * n_y, 1))], axis=-1)
         return r, t, v
 
-    trainer = MaxwellTrainer(trainer_config, random_field_init, model_config, debug=False)
+    trainer = MaxwellTrainer(trainer_config, model_config, debug=False)
 
     trainer.train(args.train_steps)
 
@@ -162,7 +145,8 @@ if __name__ == '__main__':
     parser.add_argument('--n_samples', type=int, default=5000)
     parser.add_argument('--sample_length', type=int, default=1)
     parser.add_argument('--train_steps', type=int, default=1000)
-    parser.add_argument('--precision', type=str, default='double')
+    parser.add_argument('--precision', type=str, default='single')
+    parser.add_argument('--seed', type=int, default=47)
     args = parser.parse_args()
 
     jax.config.update("jax_enable_x64", True if args.precision == 'double' else False)

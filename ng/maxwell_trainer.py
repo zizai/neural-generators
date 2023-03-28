@@ -11,8 +11,8 @@ from ml_collections import ConfigDict
 from scipy import constants
 from tqdm import tqdm
 
-from ng import maxwell_model, maxwell_potential_model
 from ng.base_trainer import BaseTrainer
+from ng.maxwell_potential_model import MaxwellPotentialModelConfig, create_maxwell_potential_model
 from ng.train_state import TrainState
 
 
@@ -33,34 +33,25 @@ def maxwell_trainer_config():
 
 
 class MaxwellTrainer(BaseTrainer):
-    def __init__(self, config: ConfigDict, init_cond: Callable, model_config: maxwell_potential_model.MaxwellPotentialModelConfig, debug=False):
+    def __init__(self, config: ConfigDict, model_config: MaxwellPotentialModelConfig, debug=False):
         super(MaxwellTrainer, self).__init__(config)
         self.model_config = model_config
 
         rng = jax.random.PRNGKey(self.seed)
+        self.rng = rng
 
-        def get_ic(_key, n_samples=None):
-
-            if n_samples is None:
-                n_samples = config.n_samples
-
-            r_i, t_i, v_i = init_cond(n_samples, _key)
-            return r_i, t_i, v_i
-
-        init, eval_step, sample_step, train_step = maxwell_potential_model.create(model_config)
+        init, eval_step, sample_step, train_step = create_maxwell_potential_model(model_config)
 
         rng, key = jax.random.split(rng)
-        ic = get_ic(key)
+        ic = self.get_ic()
         sno_def, params = init(key, ic, config.light_source, config.dielectric_fn)
         # print(jax.tree_map(lambda p: p.shape, params))
 
         opt = optax.adam(self.config.lr)
         state = TrainState.create(apply_fn=sno_def.apply, params=params, stats={}, opt=opt)
 
-        self.rng = rng
         self.model_def = sno_def
         self.state = state
-        self.get_ic = get_ic
 
         if debug:
             self.eval_step = eval_step
@@ -73,6 +64,27 @@ class MaxwellTrainer(BaseTrainer):
 
         self.rb = []
         self.train_epoch = 0
+
+    def get_ic(self, n_samples=None, scale=1.):
+        self.rng, key = jax.random.split(self.rng)
+        c = self.model_config.c
+        x_domain, y_domain = self.model_config.x_domain, self.model_config.y_domain
+
+        if n_samples is None:
+            n_samples = self.config.n_samples
+
+        n_x = round(math.sqrt((x_domain[1] - x_domain[0]) / (y_domain[1] - y_domain[0]) * n_samples))
+        n_y = round(n_x * (y_domain[1] - y_domain[0]) / (x_domain[1] - x_domain[0]))
+        pos_x = jnp.linspace(x_domain[0] * scale, x_domain[1] * scale, n_x)
+        pos_y = jnp.linspace(y_domain[0] * scale, y_domain[1] * scale, n_y)
+        r = jnp.stack(jnp.meshgrid(pos_x, pos_y), -1).reshape(-1, 2)
+        pos_z = jnp.zeros((n_x * n_y, 1))
+        r = jnp.concatenate([r, pos_z], -1)
+
+        t = jnp.zeros((n_x * n_y, 1)) + self.model_config.t_domain[0]
+        v = jax.random.normal(key, (n_x * n_y, 2)) * 0.1 * c
+        v = jnp.concatenate([v, jnp.zeros((n_x * n_y, 1))], axis=-1)
+        return r, t, v
 
     def eval(self, r_i, t_i, v_i):
         self.rng, key = jax.random.split(self.rng)
@@ -118,7 +130,6 @@ class MaxwellTrainer(BaseTrainer):
 
         for step in tqdm_iter:
             self.train_epoch += 1
-            self.rng, *keys = jax.random.split(self.rng, 9)
 
             # if step % P == 0 or step == 1:
             #     psi_i, _, r_i, t_i = self.get_ic(keys.pop())
@@ -140,8 +151,11 @@ class MaxwellTrainer(BaseTrainer):
             # mem = onp.stack([d[2] for d in samples], 0)
             # samples = r, t, mem
 
-            ic = self.get_ic(keys.pop())
-            self.state, stats = self.train_step(self.state, keys.pop(), ic, self.config.light_source, self.config.dielectric_fn, lambs[step-1])
+            self.rng, key = jax.random.split(self.rng)
+            # ic = self.get_ic(scale=jnp.exp(2 * (step / n_steps - 1)))
+            ic = self.get_ic(scale=step / n_steps + 0.1)
+
+            self.state, stats = self.train_step(self.state, key, ic, self.config.light_source, self.config.dielectric_fn, lambs[step-1])
 
             loss = stats['loss']
 
