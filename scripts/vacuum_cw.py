@@ -94,8 +94,8 @@ def run(init_sigma):
 
     def grid_field_init(n_x, rng):
         n_y = n_x // 2
-        pos_x = jnp.linspace(x_domain[0], x_domain[1], n_x)
-        pos_y = jnp.linspace(y_domain[0], y_domain[1], n_y)
+        pos_x = jnp.linspace(x_domain[0], x_domain[1], n_x, endpoint=False)
+        pos_y = jnp.linspace(y_domain[0], y_domain[1], n_y, endpoint=False)
         r = jnp.stack(jnp.meshgrid(pos_x, pos_y), -1).reshape(-1, 2)
         pos_z = jnp.zeros((n_x * n_y, 1))
         r = jnp.concatenate([r, pos_z], -1)
@@ -144,7 +144,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_layers', type=int, default=5)
     parser.add_argument('--n_samples', type=int, default=5000)
     parser.add_argument('--sample_length', type=int, default=1)
-    parser.add_argument('--train_steps', type=int, default=1000)
+    parser.add_argument('--train_steps', type=int, default=10000)
     parser.add_argument('--precision', type=str, default='single')
     parser.add_argument('--seed', type=int, default=47)
     args = parser.parse_args()

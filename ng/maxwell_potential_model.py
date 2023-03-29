@@ -520,8 +520,24 @@ def create_maxwell_potential_model(config: MaxwellPotentialModelConfig):
             err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
             # err_sup = 0.
         else:
-            err_pde = 0.
-            err_sup = 0.
+            obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, dielectric_fn, method=model.get_observables)
+            err_pde = jnp.sum(obs['err_em'])
+            # obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, DielectricVacuum(), method=model.get_observables)
+            # E_pred = obs['E_field']
+            # err_pde += jnp.sum(obs['err_em'])
+            # err_pde = 0.
+
+            imp_weights = 1.
+            # loc = jnp.asarray([light_source.loc])
+            # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
+            phi_pred, A_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, DielectricVacuum())
+            E_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, DielectricVacuum(), method=model.get_fields)
+            phi_target, A_target = light_source.get_potentials(r_i, t_i)
+            E_target = light_source.get_fields(r_i, t_i)
+            err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
+            # err_sup = 0.
 
         loss = err_pde + 100 * err_sup
         stats = dict(loss=loss, err_pde=err_pde, err_sup=err_sup)
