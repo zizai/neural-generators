@@ -84,11 +84,6 @@ class ContinuousLineSource(CWSource):
 
 
 class DipoleSource(CWSource):
-    def sample(self, rng, n_samples=100):
-        r = jnp.zeros((n_samples, len(self.loc))) + jnp.asarray([self.loc])
-        t = jax.random.uniform(rng, (n_samples, 1), minval=self.t_i, maxval=self.t_f)
-        return r, t
-
     def get_dipole_moment(self, t):
         return self.I0 / self.omega * jnp.sin(self.omega * t)
 
@@ -117,61 +112,21 @@ class DipoleSource(CWSource):
         return E
 
     def get_charge(self, r, t, *args, **kwargs):
-
-        # def grad_phi_op(_r, _t):
-        #     phi_closure = lambda some_r, some_t: self.get_potentials(some_r, some_t)[0]
-        #     grad_phi = jax.vmap(jax.jacfwd(phi_closure))(_r[:, None], _t[:, None]).reshape(_r.shape)
-        #     return grad_phi
-        #
-        # def lap_phi_op(_r, _t):
-        #     lap_phi = jax.vmap(jax.jacfwd(grad_phi_op))(_r[:, None], _t[:, None]).reshape(_r.shape + (3,))
-        #     return jnp.trace(lap_phi, axis1=-2, axis2=-1).reshape(_t.shape)
-        #
-        # def dot_phi_op(_r, _t):
-        #     _, dot_phi = jax.jvp(lambda some_t: self.get_potentials(_r, some_t)[0],
-        #                          [_t], [jnp.ones_like(_t)])
-        #     return dot_phi
-        #
-        # def ddot_phi_op(_r, _t):
-        #     _, ddot_phi = jax.jvp(lambda some_t: dot_phi_op(_r, some_t),
-        #                           [_t], [jnp.ones_like(_t)])
-        #     return ddot_phi
-
-        # rho = (-lap_phi_op(r, t) + 1 / self.c ** 2 * ddot_phi_op(r, t)) * self.eps_0
         # loc = jnp.asarray([self.loc])
         # # delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
         # delta_r = jnp.exp(-(r - loc) ** 2 / 2 / 1e-3 ** 2)
-        # rho = delta_r
-
-        rho = jnp.zeros_like(t)
+        # rho = -p * delta_r
+        loc = jnp.asarray([self.loc])
+        R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        phi, _ = self.get_potentials(r, t)
+        delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
+        rho = delta_r * (4 * jnp.pi * self.eps_0 * R * phi)
         return rho
 
     def get_current(self, r, t, *args, **kwargs):
-
-        # def grad_A_op(_r, _t):
-        #     A_closure = lambda some_r, some_t: self.get_potentials(some_r, some_t)[1]
-        #     grad_A = jax.vmap(jax.jacfwd(A_closure))(_r[:, None], _t[:, None]).reshape(_r.shape + (3,))
-        #     return grad_A
-        #
-        # def lap_A_op(_r, _t):
-        #     lap_A = jax.vmap(jax.jacfwd(grad_A_op))(_r[:, None], _t[:, None]).reshape(_r.shape + (3, 3))
-        #     return jnp.trace(lap_A, axis1=-2, axis2=-1).reshape(_r.shape)
-        #
-        # def dot_A_op(_r, _t):
-        #     _, dot_A = jax.jvp(lambda some_t: self.get_potentials(_r, some_t)[1],
-        #                        [_t], [jnp.ones_like(_t)])
-        #     return dot_A
-        #
-        # def ddot_A_op(_r, _t):
-        #     _, ddot_A = jax.jvp(lambda some_t: dot_A_op(_r, some_t),
-        #                         [_t], [jnp.ones_like(_t)])
-        #     return ddot_A
-        #
-        # j = (-lap_A_op(r, t) + 1 / self.c ** 2 * ddot_A_op(r, t)) * self.eps_0 * self.c ** 2
-
         loc = jnp.asarray([self.loc])
-        # delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
-        delta_r = jnp.exp(-(r - loc) ** 2 / 2 / 1e-3 ** 2)
+        delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
+        # delta_r = jnp.exp(-(r - loc) ** 2 / 2 / 1e-3 ** 2)
         j = delta_r * self.I0 * jnp.cos(self.omega * t)
 
         return j

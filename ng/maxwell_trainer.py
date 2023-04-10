@@ -102,7 +102,7 @@ class MaxwellTrainer(BaseTrainer):
             h_next, r_next, t_next, v_next = self.sample_step(self.state.params, key2, h_i, r_i, t_i, v_i, self.config.light_source, self.config.dielectric_fn)
 
             if step % skip == 0:
-                pred = self.eval_step(self.state.params, key1, h_i[None], r_i[None], t_i[None], self.config.light_source, self.config.dielectric_fn)
+                pred = self.eval_step(self.state.params, key1, h_i, r_i, t_i, self.config.light_source, self.config.dielectric_fn)
 
                 preds.append(pred)
                 rs.append(r_i)
@@ -110,7 +110,7 @@ class MaxwellTrainer(BaseTrainer):
                 vs.append(v_i)
 
             if step == n_steps - 1:
-                pred = self.eval_step(self.state.params, key1, h_next[None], r_next[None], t_next[None], self.config.light_source, self.config.dielectric_fn)
+                pred = self.eval_step(self.state.params, key1, h_next, r_next, t_next, self.config.light_source, self.config.dielectric_fn)
 
                 preds.append(pred)
                 rs.append(r_next)
@@ -119,7 +119,7 @@ class MaxwellTrainer(BaseTrainer):
 
             h_i, r_i, t_i, v_i = h_next, r_next, t_next, v_next
 
-        return onp.asarray(preds), onp.asarray(rs), onp.asarray(ts), onp.asarray(vs)
+        return preds, onp.asarray(rs), onp.asarray(ts), onp.asarray(vs)
 
     def train(self, n_steps):
         tqdm_iter = tqdm(range(1, n_steps + 1))

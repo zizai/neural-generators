@@ -137,8 +137,17 @@ def run(init_sigma):
     # plot_fields(j, 'vacuum_cw_ic_j')
 
     preds, rs, ts, vs = trainer.eval(*ic)
-    E_pred = preds[0].reshape(ny, nx, -1)
+    E_pred = preds[0]['E'].reshape(ny, nx, -1)
     plot_fields(E_pred, f'prism_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_E')
+
+    phi_pred = preds[0]['phi'].reshape(ny, nx, -1)
+    plt.imshow(np.flipud(phi_pred[..., 0]), cmap='RdBu')
+    plt.colorbar()
+    plt.savefig(f'prism_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_phi.png')
+    plt.clf()
+
+    A_pred = preds[0]['A'].reshape(ny, nx, -1)
+    plot_fields(A_pred, f'prism_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_A')
 
 
 if __name__ == '__main__':

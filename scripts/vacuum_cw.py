@@ -89,11 +89,9 @@ def run(init_sigma):
         features=args.features,
         modes=1,
         n_layers=args.n_layers,
-        dtype=jnp.float32
     )
 
-    def grid_field_init(n_x, rng):
-        n_y = n_x // 2
+    def grid_field_init(n_x, n_y, rng):
         pos_x = jnp.linspace(x_domain[0], x_domain[1], n_x, endpoint=False)
         pos_y = jnp.linspace(y_domain[0], y_domain[1], n_y, endpoint=False)
         r = jnp.stack(jnp.meshgrid(pos_x, pos_y), -1).reshape(-1, 2)
@@ -107,14 +105,34 @@ def run(init_sigma):
 
     trainer = MaxwellTrainer(trainer_config, model_config, debug=False)
 
-    trainer.train(args.train_steps)
+    # trainer.train(args.train_steps)
 
-    ic = grid_field_init(200, trainer.rng)
+    n_x, n_y = 200, 100
+    ic = grid_field_init(n_x, n_y, trainer.rng)
     ic_r, ic_t, _ = ic
 
     ic_E = light_source.get_fields(ic_r, ic_t)
-    ic_E = ic_E.reshape(100, 200, -1)
+    ic_E = ic_E.reshape(n_y, n_x, -1)
     plot_fields(ic_E, 'vacuum_cw_ic_E')
+
+    ic_phi, ic_A = light_source.get_potentials(ic_r, ic_t)
+    ic_phi = ic_phi.reshape(n_y, n_x, -1)
+    plt.imshow(np.flipud(ic_phi[..., 0]), cmap='RdBu')
+    plt.colorbar()
+    plt.savefig(f'vacuum_cw_ic_phi.png')
+    plt.clf()
+
+    ic_R = jnp.sqrt(jnp.sum((ic_r - jnp.array([source_loc])) ** 2, axis=-1, keepdims=True))
+    ic_t_retarded = ic_t - ic_R / c
+    ic_phi = -light_source.get_dipole_moment(ic_t_retarded) / (4 * jnp.pi * eps_0 * ic_R)
+    ic_phi = ic_phi.reshape(n_y, n_x, -1)
+    plt.imshow(np.flipud(ic_phi[..., 0]), cmap='RdBu')
+    plt.colorbar()
+    plt.savefig(f'vacuum_cw_ic_phi_alt.png')
+    plt.clf()
+
+    ic_A = ic_A.reshape(n_y, n_x, -1)
+    plot_fields(ic_A, f'vacuum_cw_ic_A')
 
     # rho = light_source.get_charge(ic_r, ic_t)
     # rho = rho.reshape(100, 200, -1)
@@ -130,8 +148,17 @@ def run(init_sigma):
     # plot_fields(j, 'vacuum_cw_ic_j')
 
     preds, rs, ts, vs = trainer.eval(*ic)
-    E_pred = preds[0].reshape(100, 200, -1)
-    plot_fields(E_pred, f'vacuum_cw_t_{ts[0].reshape(20000)[0]}_init_sigma_{init_sigma}_features_{args.features}_E')
+    E_pred = preds[0]['E'].reshape(n_y, n_x, -1)
+    plot_fields(E_pred, f'vacuum_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_E')
+
+    phi_pred = preds[0]['phi'].reshape(n_y, n_x, -1)
+    plt.imshow(np.flipud(phi_pred[..., 0]), cmap='RdBu')
+    plt.colorbar()
+    plt.savefig(f'vacuum_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_phi.png')
+    plt.clf()
+
+    A_pred = preds[0]['A'].reshape(n_y, n_x, -1)
+    plot_fields(A_pred, f'vacuum_cw_t_{t_domain[0]}_init_sigma_{init_sigma}_features_{args.features}_A')
 
 
 if __name__ == '__main__':

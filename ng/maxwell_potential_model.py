@@ -263,8 +263,9 @@ class AmuNet(linen.Module):
         mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
         loc = jnp.asarray([light_source.loc])
         R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
-        x = jnp.concatenate([c * t, R, mat], -1)
-        # x = jnp.concatenate([c * t, r, mat], -1)
+        # x = jnp.concatenate([c * t, R, mat], -1)
+        # theta = jnp.angle(r[..., 0:1] / R + 1j * r[..., 1:2] / R)
+        x = jnp.concatenate([c * t, r, R, mat], -1)
 
         # A_mu = SIREN(features, n_layers=n_layers,  out_dim=4)(x)
         # A_0 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
@@ -338,7 +339,7 @@ class MaxwellPotentialModel(linen.Module):
         c = self.config.c
         eps_0 = self.config.eps_0
 
-        E_field = self.get_fields(h, r, t, light_source, dielectric_fn)
+        pred = self.get_fields(h, r, t, light_source, dielectric_fn)
 
         def grad_phi_op(_r, _t):
             phi_closure = lambda some_r, some_t: self.get_phi(h, some_r, some_t, light_source, dielectric_fn)
@@ -414,7 +415,7 @@ class MaxwellPotentialModel(linen.Module):
             err_em += jnp.sum(jnp.real(res2.conj() * res2))
 
         obs = dict(
-            E_field=E_field,
+            pred=pred,
             err_em=err_em,
             logq=0.
         )
@@ -425,16 +426,17 @@ class MaxwellPotentialModel(linen.Module):
         # A = self.A_net(h, r, t, light_source, dielectric_fn)
         # return phi, A
         A_mu = self.A_mu_net(h, r, t, light_source, dielectric_fn)
-        return A_mu[..., 0:1], A_mu[..., 1:4]
+        return A_mu
 
     def get_fields(self, h, r, t, light_source, dielectric_fn):
+        A_mu = self.A_mu_net(h, r, t, light_source, dielectric_fn)
         phi_closure = lambda _r, _t: self.get_phi(h, _r, _t, light_source, dielectric_fn)
         grad_phi = jax.vmap(jax.jacfwd(phi_closure))(r[:, None], t[:, None]).reshape(r.shape)
         _, dot_A = jax.jvp(lambda _t: self.get_A(h, r, _t, light_source, dielectric_fn),
                            [t], [jnp.ones_like(t)])
         dot_A = dot_A.reshape(r.shape)
         E = -grad_phi - dot_A
-        return E
+        return dict(E=E, phi=A_mu[..., 0:1], A=A_mu[..., 1:4])
 
     def update(self, h, r, t, v, light_source, dielectric_fn):
         dt = self.config.dt
@@ -504,48 +506,57 @@ def create_maxwell_potential_model(config: MaxwellPotentialModelConfig):
 
         if isinstance(dielectric_fn, DielectricVacuum):
             obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, dielectric_fn, method=model.get_observables)
-            E_pred = obs['E_field']
+            pred = obs['pred']
             err_pde = jnp.sum(obs['err_em'])
             # err_pde = 0.
 
             imp_weights = 1.
             # loc = jnp.asarray([light_source.loc])
             # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
-            phi_pred, A_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, dielectric_fn)
+            # phi_pred, A_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, dielectric_fn)
             # E_pred = model.apply({'params': params}, h_i, r_vac, t_vac, light_source, dielectric_fn, method=model.get_fields)
             phi_target, A_target = light_source.get_potentials(r_i, t_i)
             E_target = light_source.get_fields(r_i, t_i)
-            err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
-            err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
-            err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
+            err_sup = jnp.sum(jnp.abs(jnp.real(pred['E']) - jnp.real(E_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['phi']) - jnp.real(phi_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['A']) - jnp.real(A_target)) ** 2 * imp_weights)
             # err_sup = 0.
         else:
             obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, dielectric_fn, method=model.get_observables)
             err_pde = jnp.sum(obs['err_em'])
+
+            source_loc = jnp.asarray([light_source.loc])
+            n_near = 1000
+            r_near = jax.random.normal(rng, (n_near, 3)) * 2 * jnp.pi / light_source.k0 * 0.1 + source_loc
+            t_near = jnp.zeros((n_near, 1)) + config.t_domain[0]
+            pred = model.apply({'params': params}, h_i, r_near, t_near, light_source, dielectric_fn, method=model.get_fields)
+            phi_target, A_target = light_source.get_potentials(r_near, t_near)
+            E_target = light_source.get_fields(r_near, t_near)
+            imp_weights = 1.
+            err_sup = jnp.sum(jnp.abs(jnp.real(pred['E']) - jnp.real(E_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['phi']) - jnp.real(phi_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['A']) - jnp.real(A_target)) ** 2 * imp_weights)
+
             # obs = model.apply({'params': params}, key, h_i, r_i, t_i, light_source, DielectricVacuum(), method=model.get_observables)
-            # E_pred = obs['E_field']
             # err_pde += jnp.sum(obs['err_em'])
-            # err_pde = 0.
 
             imp_weights = 1.
             # loc = jnp.asarray([light_source.loc])
             # imp_weights = jnp.sum((r_vac - loc) ** 2, axis=-1, keepdims=True)
-            phi_pred, A_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, DielectricVacuum())
-            E_pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, DielectricVacuum(), method=model.get_fields)
+            pred = model.apply({'params': params}, h_i, r_i, t_i, light_source, DielectricVacuum(), method=model.get_fields)
             phi_target, A_target = light_source.get_potentials(r_i, t_i)
             E_target = light_source.get_fields(r_i, t_i)
-            err_sup = jnp.sum(jnp.abs(jnp.real(E_pred) - jnp.real(E_target)) ** 2 * imp_weights)
-            err_sup += jnp.sum(jnp.abs(jnp.real(phi_pred) - jnp.real(phi_target)) ** 2 * imp_weights)
-            err_sup += jnp.sum(jnp.abs(jnp.real(A_pred) - jnp.real(A_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['E']) - jnp.real(E_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['phi']) - jnp.real(phi_target)) ** 2 * imp_weights)
+            err_sup += jnp.sum(jnp.abs(jnp.real(pred['A']) - jnp.real(A_target)) ** 2 * imp_weights)
             # err_sup = 0.
 
         loss = err_pde + 100 * err_sup
         stats = dict(loss=loss, err_pde=err_pde, err_sup=err_sup)
         return loss, stats
 
-    def eval_step(params, rng, h_batch, r_batch, t_batch, light_source, dielectric_fn, lamb=1.0):
-        preds = get_pred(params, h_batch, r_batch, t_batch, light_source, dielectric_fn)
-        return preds
+    def eval_step(params, rng, h, r, t, light_source, dielectric_fn, lamb=1.0):
+        return model.apply({'params': params}, h, r, t, light_source, dielectric_fn, method=model.get_fields)
 
     def train_step(state: TrainState, rng: chex.PRNGKey, ic: typing.Tuple, light_source,
                    dielectric_fn: GenericMaterial, lamb: float):
