@@ -87,7 +87,7 @@ def run(init_sigma):
         eps_0=eps_0,
         init_sigma=init_sigma,
         features=args.features,
-        modes=1,
+        modes=10,
         n_layers=args.n_layers,
     )
 
@@ -105,7 +105,7 @@ def run(init_sigma):
 
     trainer = MaxwellTrainer(trainer_config, model_config, debug=False)
 
-    # trainer.train(args.train_steps)
+    trainer.train(args.train_steps)
 
     n_x, n_y = 200, 100
     ic = grid_field_init(n_x, n_y, trainer.rng)

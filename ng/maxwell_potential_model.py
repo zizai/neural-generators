@@ -36,8 +36,6 @@ class MaxwellPotentialModelConfig(struct.PyTreeNode):
     gauge_choice: str = 'lorentz'
     substeps: int = 5
     dtype: typing.Any = jnp.float_
-    log_domain: bool = True
-    use_ode: bool = False
 
 
 class SpaceEmbedding(linen.Module):
@@ -127,7 +125,7 @@ class KNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        x = MaterialEmbedding(self.config)(r, dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -141,14 +139,14 @@ class KNet(linen.Module):
         x = linen.silu(linen.Dense(features * 2)(x))
         x = linen.Dense(features * 2)(x)
 
-        # x = linen.Dense(modes * 4)(x)
-        # K0 = jnp.asarray([light_source.omega, light_source.k0, light_source.k0, light_source.k0])
-        # K = x.reshape(-1, modes, 4) * K0
+        x = linen.Dense(modes * 4)(x)
+        K0 = jnp.asarray([light_source.omega, light_source.k0, light_source.k0, light_source.k0])
+        K = x.reshape(-1, modes, 4) * K0
 
-        x = linen.Dense(modes * 3)(x)
-        K = x.reshape(-1, modes, 3) * light_source.k0
-        c = self.config.c / jnp.sqrt(dielectric_fn(r)[..., 0:1])
-        K = jnp.concatenate([jnp.sqrt(jnp.sum(K ** 2, axis=-1, keepdims=True)) * c[:, None], K], -1)
+        # x = linen.Dense(modes * 3)(x)
+        # K = x.reshape(-1, modes, 3) * light_source.k0
+        # c = self.config.c / jnp.sqrt(dielectric_fn(r)[..., 0:1])
+        # K = jnp.concatenate([jnp.sqrt(jnp.sum(K ** 2, axis=-1, keepdims=True)) * c[:, None], K], -1)
 
         return K
 
@@ -162,7 +160,7 @@ class BNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        x = MaterialEmbedding(self.config)(r, dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -191,7 +189,7 @@ class WNet(linen.Module):
         modes = self.config.modes
         r_dim = r.shape[-1]
 
-        x = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        x = MaterialEmbedding(self.config)(r, dielectric_fn)
         r_emb = SpaceEmbedding(self.config)(r, light_source)
         t_emb = TimeEmbedding(self.config)(t, light_source)
         x = jnp.concatenate([x, r_emb, t_emb], -1)
@@ -218,12 +216,12 @@ class PhiNet(linen.Module):
 
     @linen.compact
     def __call__(self, h, r, t, light_source, dielectric_fn):
-        K = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        B = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        W = WNet(self.config, 1)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        k_mu = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        b = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        w = WNet(self.config, 1)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
 
         x_mu = jnp.concatenate([t, r], -1)
-        phi = W * jnp.exp(1j * (jnp.sum(K * x_mu[:, None], axis=-1, keepdims=True) + B))
+        phi = w * jnp.exp(1j * (jnp.sum(k_mu * x_mu[:, None], axis=-1, keepdims=True) + b))
         phi = jnp.mean(phi, 1)
         return phi
 
@@ -248,56 +246,49 @@ class AmuNet(linen.Module):
 
     @linen.compact
     def __call__(self, h, r, t, light_source, dielectric_fn):
-        # K = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        # B = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
-        # W = WNet(self.config, 4)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        k_mu = KNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        b = BNet(self.config)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+        w = WNet(self.config, 4)(h, jax.lax.stop_gradient(r), jax.lax.stop_gradient(t), light_source, dielectric_fn)
+
+        x_mu = jnp.concatenate([t, r], -1)
+        A_mu = w * jnp.exp(1j * (jnp.sum(k_mu * x_mu[:, None], axis=-1, keepdims=True) + b))
+        A_mu = jnp.real(jnp.mean(A_mu, 1))
+
+        # features = self.config.features
+        # n_layers = self.config.n_layers
+        # c = self.config.c
         #
-        # x_mu = jnp.concatenate([t, r], -1)
-        # A_mu = W * jnp.exp(1j * (jnp.sum(K * x_mu[:, None], axis=-1, keepdims=True) + B))
-        # A_mu = jnp.mean(A_mu, 1)
+        # mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+        # loc = jnp.asarray([light_source.loc])
+        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+        # # x = jnp.concatenate([c * t, R, mat], -1)
+        # # theta = jnp.angle(r[..., 0:1] / R + 1j * r[..., 1:2] / R)
+        # x = jnp.concatenate([c * t, r, R, mat], -1)
 
-        features = self.config.features
-        n_layers = self.config.n_layers
-        c = self.config.c
-
-        mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
-        loc = jnp.asarray([light_source.loc])
-        R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
-        # x = jnp.concatenate([c * t, R, mat], -1)
-        # theta = jnp.angle(r[..., 0:1] / R + 1j * r[..., 1:2] / R)
-        x = jnp.concatenate([c * t, r, R, mat], -1)
-
-        # A_mu = SIREN(features, n_layers=n_layers,  out_dim=4)(x)
-        # A_0 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
-        # A_1 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
-        # A_2 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
-        # A_3 = SIREN(features, n_layers=n_layers, out_dim=1)(x)
-        # A_mu = jnp.concatenate([A_0, A_1, A_2, A_3], -1)
-
-        phi = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
-        A = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
-
-        x = jnp.concatenate([r / (R + 1e-6), mat], -1)
-        x = linen.silu(linen.Dense(features)(x))
-        x = linen.Dense(features)(x)
-
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x0 = x
-        x = linen.silu(linen.Dense(features)(x0))
-        x = linen.Dense(features)(x) + x0
-
-        x = linen.silu(linen.Dense(features * 2)(x))
-        w = linen.Dense(4)(x)
-
-        A_mu = jnp.concatenate([w[..., 0:1] * phi, w[..., 1:4] * A], -1)
-        # A_mu = w * A_mu
+        # phi = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
+        # A = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
+        #
+        # x = jnp.concatenate([r / (R + 1e-6), mat], -1)
+        # x = linen.silu(linen.Dense(features)(x))
+        # x = linen.Dense(features)(x)
+        #
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x0 = x
+        # x = linen.silu(linen.Dense(features)(x0))
+        # x = linen.Dense(features)(x) + x0
+        #
+        # x = linen.silu(linen.Dense(features * 2)(x))
+        # w = linen.Dense(4)(x)
+        #
+        # A_mu = jnp.concatenate([w[..., 0:1] * phi, w[..., 1:4] * A], -1)
+        # # A_mu = w * A_mu
 
         return A_mu
 
