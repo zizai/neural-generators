@@ -87,7 +87,7 @@ def run(init_sigma):
         eps_0=eps_0,
         init_sigma=init_sigma,
         features=args.features,
-        modes=1,
+        modes=20,
         n_layers=args.n_layers,
         dtype=jnp.float32
     )
