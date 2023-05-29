@@ -75,6 +75,7 @@ def run(init_sigma):
         n_samples=args.n_samples,
         light_source=light_source,
         dielectric_fn=DielectricPrism(Lx, Ly, x0=wavelength),
+        lr=3e-4,
         etol=1e-2
     )
     model_config = MaxwellPotentialModelConfig(
@@ -157,8 +158,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--beta', type=float, default=None)
     parser.add_argument('--features', type=int, default=64)
-    parser.add_argument('--n_layers', type=int, default=5)
-    parser.add_argument('--n_samples', type=int, default=5000)
+    parser.add_argument('--n_layers', type=int, default=3)
+    parser.add_argument('--n_samples', type=int, default=4000)
     parser.add_argument('--sample_length', type=int, default=1)
     parser.add_argument('--train_steps', type=int, default=10000)
     parser.add_argument('--precision', type=str, default='single')
