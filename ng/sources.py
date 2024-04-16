@@ -119,13 +119,13 @@ class DipoleSource(CWSource):
         loc = jnp.asarray([self.loc])
         R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
         phi, _ = self.get_potentials(r, t)
-        delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
+        delta_r = jnp.all(jnp.equal(r, loc), axis=-1, keepdims=True)
         rho = delta_r * (4 * jnp.pi * self.eps_0 * R * phi)
         return rho
 
     def get_current(self, r, t, *args, **kwargs):
         loc = jnp.asarray([self.loc])
-        delta_r = jnp.alltrue(jnp.equal(r, loc), axis=-1, keepdims=True)
+        delta_r = jnp.all(jnp.equal(r, loc), axis=-1, keepdims=True)
         # delta_r = jnp.exp(-(r - loc) ** 2 / 2 / 1e-3 ** 2)
         j = delta_r * self.I0 * jnp.cos(self.omega * t)
 

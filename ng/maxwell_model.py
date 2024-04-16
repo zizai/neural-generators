@@ -12,13 +12,15 @@ from ng import au_const
 from ng.materials import GenericMaterial
 from ng.ng_layer import NeuralGeneratorLayer
 from ng.potentials import GenericPotential
+from ng.siren import SIREN
 from ng.sources import CWSource
 from ng.train_state import TrainState
 
 
 class MaxwellModelConfig(struct.PyTreeNode):
-    t_i: float
-    t_f: float
+    t_domain: typing.Tuple
+    x_domain: typing.Tuple
+    y_domain: typing.Tuple
     dt: float
     sample_length: int
     c: float = 1.
@@ -316,7 +318,6 @@ class MaxwellModel(linen.Module):
 
     def setup(self):
         self.e_net = ENet(self.config)
-        # self.e_net = SIREN(self.config)
 
     def get_observables(self, rng, h, r, t, light_source, dielectric_fn):
         c = self.config.c
@@ -474,7 +475,7 @@ class MaxwellModel(linen.Module):
         return h, r_next, t_next, v_next
 
 
-def create(config: MaxwellModelConfig):
+def create_maxwell_model(config: MaxwellModelConfig):
     # layers = [NPILayer(config) for i in range(config.T)]
     # npi = NPI(config, layers)
 
@@ -604,7 +605,7 @@ def create(config: MaxwellModelConfig):
         loc = jnp.asarray([light_source.loc])
         ic_r = jax.random.uniform(key, r_traj.shape[1:], minval=-1., maxval=1.) * config.wavelength * 10 + loc
         # ic_t = jax.random.uniform(key, t_traj.shape[1:]) * (config.t_f - config.t_i) + config.t_i
-        ic_t = jnp.zeros(t_traj.shape[1:]) + config.t_i
+        ic_t = jnp.zeros(t_traj.shape[1:]) + config.t_domain[0]
         obs_ic = model.apply({'params': params}, key, h_i, ic_r, ic_t, light_source, dielectric_fn,
                              method=model.get_observables)
         E_pred = obs_ic['E_field']

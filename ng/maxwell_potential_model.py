@@ -36,6 +36,7 @@ class MaxwellPotentialModelConfig(struct.PyTreeNode):
     gauge_choice: str = 'lorentz'
     substeps: int = 5
     dtype: typing.Any = jnp.float_
+    model_type: str = 'SIREN'
 
 
 class SpaceEmbedding(linen.Module):
@@ -328,41 +329,44 @@ class AmuNet(linen.Module):
 
     @linen.compact
     def __call__(self, h, r, t, light_source, dielectric_fn):
-        # features = self.config.features
-        # modes = self.config.modes
-        # n_layers = self.config.n_layers
-        # c = self.config.c
+        if self.config.model_type == 'SIREN':
+            features = self.config.features
+            modes = self.config.modes
+            n_layers = self.config.n_layers
+            c = self.config.c
 
-        # mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
-        # loc = jnp.asarray([light_source.loc])
-        # R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
-        # theta = jnp.angle(r[..., 0:1] / R + 1j * r[..., 1:2] / R)
+            mat = MaterialEmbedding(self.config)(jax.lax.stop_gradient(r), dielectric_fn)
+            loc = jnp.asarray([light_source.loc])
+            R = jnp.sqrt(jnp.sum((r - loc) ** 2, axis=-1, keepdims=True))
+            # theta = jnp.angle(r[..., 0:1] / R + 1j * r[..., 1:2] / R)
 
-        # x = jnp.concatenate([c * t, R, mat], -1)
-        # phi = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
-        # A = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
-        #
-        # x = jnp.concatenate([r / (R + 1e-6), mat], -1)
-        # x = linen.silu(linen.Dense(features)(x))
-        # x = linen.Dense(features)(x)
-        #
-        # for _ in range(n_layers):
-        #     x0 = x
-        #     x = linen.silu(linen.Dense(features)(x0))
-        #     x = linen.Dense(features)(x) + x0
-        #
-        # x = linen.silu(linen.Dense(features * 2)(x))
-        # x = linen.Dense(features)(x)
-        # p = linen.Dense(4)(x)
-        # A_mu = jnp.concatenate([p[..., 0:1] * phi, p[..., 1:4] * A], -1)
+            x = jnp.concatenate([c * t, R, mat], -1)
+            phi = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
+            A = SIREN(features, n_layers=n_layers, omega0=1., out_dim=1)(x)
 
-        modes = self.config.modes
-        phi = PhiNet(self.config)(h, r, t, light_source, dielectric_fn)
-        A = ANet(self.config)(h, r, t, light_source, dielectric_fn)
-        A_mu = jnp.concatenate([phi, A], -1)
+            x = jnp.concatenate([r / (R + 1e-6), mat], -1)
+            x = linen.silu(linen.Dense(features)(x))
+            x = linen.Dense(features)(x)
 
-        a = self.param('a', linen.initializers.uniform(2 / modes), (modes, 1))
-        A_mu = jnp.sum(a * A_mu, 1)
+            for _ in range(n_layers):
+                x0 = x
+                x = linen.silu(linen.Dense(features)(x0))
+                x = linen.Dense(features)(x) + x0
+
+            x = linen.silu(linen.Dense(features * 2)(x))
+            x = linen.Dense(features)(x)
+            p = linen.Dense(4)(x)
+            A_mu = jnp.concatenate([p[..., 0:1] * phi, p[..., 1:4] * A], -1)
+        elif self.config.model_type == 'NG':
+            modes = self.config.modes
+            phi = PhiNet(self.config)(h, r, t, light_source, dielectric_fn)
+            A = ANet(self.config)(h, r, t, light_source, dielectric_fn)
+            A_mu = jnp.concatenate([phi, A], -1)
+
+            a = self.param('a', linen.initializers.uniform(2 / modes), (modes, 1))
+            A_mu = jnp.sum(a * A_mu, 1)
+        else:
+            raise NotImplementedError
 
         return A_mu
 

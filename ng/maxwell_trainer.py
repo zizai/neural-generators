@@ -12,6 +12,7 @@ from scipy import constants
 from tqdm import tqdm
 
 from ng.base_trainer import BaseTrainer
+from ng.maxwell_model import MaxwellModelConfig, create_maxwell_model
 from ng.maxwell_potential_model import MaxwellPotentialModelConfig, create_maxwell_potential_model
 from ng.train_state import TrainState
 
